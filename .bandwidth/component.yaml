@@ -1,0 +1,17 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  schemaVersion: v1.0.0
+  name: smartnumbers-hermes
+  description: Hermes plugin for the smartnumbers service
+  annotations:
+    github.com/project-slug: Bandwidth/smartnumbers-hermes
+  organization: BW
+  costCenter: 
+  platformType: VM
+  buildPlatform: GitHub Actions
+spec:
+  type: Library
+  owner: github/band-innovation
+  lifecycle: Prototype
+  

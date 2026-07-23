@@ -150,6 +150,102 @@ def test_run_browser_setup_uses_browser_and_container_urls_separately(monkeypatc
     assert captured["persist"] == (token, {"plugin_key": "smartnumbers", "api_key_env": "TRANSCRIPT_LISTENER_API_KEY", "app_url": "http://localhost:3000"})
 
 
+def test_manual_setup_exchanges_pasted_callback_without_callback_server(monkeypatch, capsys):
+    captured = {}
+    token = setup_flow.SetupToken(
+        api_key="bwa_key_test",
+        key_prefix="bwa_key_",
+        websocket_url="wss://smart.example/ws/hermes",
+        permissions=("smart-numbers:connect",),
+    )
+
+    def callback_server_must_not_start(**kwargs):
+        raise AssertionError(f"manual setup started a callback server: {kwargs}")
+
+    def fake_open_browser(auth_url):
+        captured["auth_url"] = auth_url
+        return True
+
+    def fake_read_callback(prompt):
+        assert prompt == "Paste callback URL: "
+        state = parse_qs(urlparse(captured["auth_url"]).query)["state"][0]
+        return f"http://127.0.0.1:3021/callback?code=manual-code&state={state}"
+
+    monkeypatch.setattr(setup_flow, "CallbackServer", callback_server_must_not_start)
+    monkeypatch.setattr(setup_flow, "exchange_connection_token", lambda **kwargs: captured.update(exchange=kwargs) or token)
+    monkeypatch.setattr(
+        setup_flow,
+        "persist_setup_result",
+        lambda setup_token, **kwargs: captured.update(persist=(setup_token, kwargs)),
+    )
+
+    result = setup_flow.run_browser_setup(
+        app_url="https://smart.example",
+        manual_paste=True,
+        open_browser=fake_open_browser,
+        read_callback=fake_read_callback,
+    )
+
+    assert result == token
+    assert parse_qs(urlparse(captured["auth_url"]).query)["redirect_uri"] == [
+        "http://127.0.0.1:3021/callback"
+    ]
+    assert captured["exchange"]["code"] == "manual-code"
+    assert captured["exchange"]["redirect_uri"] == "http://127.0.0.1:3021/callback"
+    assert captured["exchange"]["code_verifier"]
+    assert captured["persist"] == (
+        token,
+        {"plugin_key": "smartnumbers", "api_key_env": "TRANSCRIPT_LISTENER_API_KEY", "app_url": "https://smart.example"},
+    )
+    assert "manual-code" not in capsys.readouterr().out
+
+
+def test_manual_setup_rejects_mismatched_state_before_token_exchange(monkeypatch):
+    monkeypatch.setattr(
+        setup_flow,
+        "exchange_connection_token",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError(f"unexpected exchange: {kwargs}")),
+    )
+
+    try:
+        setup_flow.run_browser_setup(
+            app_url="https://smart.example",
+            manual_paste=True,
+            open_browser_enabled=False,
+            read_callback=lambda prompt: "http://127.0.0.1:3021/callback?code=manual-code&state=wrong-state",
+        )
+    except setup_flow.SetupError as exc:
+        assert str(exc) == "setup callback state did not match"
+    else:
+        raise AssertionError("expected manual setup to reject the mismatched callback state")
+
+
+def test_parse_manual_callback_requires_the_expected_complete_redirect_url():
+    expected = "http://127.0.0.1:3021/callback"
+    result = setup_flow.parse_manual_callback(
+        "  http://127.0.0.1:3021/callback?code=manual-code&state=expected-state  ",
+        expected_redirect_uri=expected,
+    )
+
+    assert result == setup_flow.CallbackResult(code="manual-code", state="expected-state", error=None)
+
+    for value in (
+        "manual-code",
+        "http://localhost:3021/callback?code=manual-code&state=expected-state",
+        "http://127.0.0.1:3022/callback?code=manual-code&state=expected-state",
+        "http://127.0.0.1:3021/not-callback?code=manual-code&state=expected-state",
+        "http://127.0.0.1:3021/callback?code=manual-code&state=expected-state&state=duplicate",
+        "http://127.0.0.1:3021/callback?code=manual-code&error=denied&state=expected-state",
+        "http://127.0.0.1:3021/callback?code=manual-code",
+    ):
+        try:
+            setup_flow.parse_manual_callback(value, expected_redirect_uri=expected)
+        except setup_flow.SetupError:
+            pass
+        else:
+            raise AssertionError(f"expected manual callback to reject {value!r}")
+
+
 def test_setup_token_rejects_insecure_nonlocal_websocket_url():
     try:
         setup_flow.SetupToken.from_mapping(

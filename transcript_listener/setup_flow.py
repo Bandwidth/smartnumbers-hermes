@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -24,6 +25,8 @@ CONNECT_PATH = "/hermes/connect"
 TOKEN_PATH = "/api/hermes/connection-token"
 API_KEY_ENV = "TRANSCRIPT_LISTENER_API_KEY"
 PLUGIN_KEY = "smartnumbers"
+MANUAL_CALLBACK_PORT = 3021
+MAX_CALLBACK_URL_LENGTH = 8192
 
 
 class SetupError(Exception):
@@ -83,6 +86,8 @@ def run_browser_setup(
     callback_port: int = 0,
     open_browser_enabled: bool = True,
     open_browser: Callable[[str], bool] = webbrowser.open,
+    manual_paste: bool = False,
+    read_callback: Callable[[str], str] = input,
 ) -> SetupToken:
     app_url = normalize_app_url(app_url)
     setup_url = normalize_app_url(setup_url or app_url)
@@ -95,35 +100,114 @@ def run_browser_setup(
     pkce = create_pkce_pair()
     state = secrets.token_urlsafe(32)
 
-    with CallbackServer(bind_host=callback_bind_host, redirect_host=callback_host, port=callback_port) as callback_server:
-        redirect_uri = callback_server.redirect_uri
+    if manual_paste:
+        redirect_uri = manual_redirect_uri(callback_host=callback_host, callback_port=callback_port)
         auth_url = build_connect_url(
             app_url=setup_url,
             redirect_uri=redirect_uri,
             state=state,
             code_challenge=pkce.challenge,
         )
-        print(f"Open Smart Numbers setup in your browser:\n{auth_url}")
-        if open_browser_enabled and not open_browser(auth_url):
-            print("Could not open a browser automatically. Open the URL above manually.")
-        result = callback_server.wait(timeout_seconds)
+        result = _manual_callback_result(
+            auth_url,
+            redirect_uri,
+            open_browser_enabled,
+            open_browser,
+            read_callback,
+        )
+    else:
+        with CallbackServer(bind_host=callback_bind_host, redirect_host=callback_host, port=callback_port) as callback_server:
+            redirect_uri = callback_server.redirect_uri
+            auth_url = build_connect_url(
+                app_url=setup_url,
+                redirect_uri=redirect_uri,
+                state=state,
+                code_challenge=pkce.challenge,
+            )
+            print(f"Open Smart Numbers setup in your browser:\n{auth_url}")
+            if open_browser_enabled and not open_browser(auth_url):
+                print("Could not open a browser automatically. Open the URL above manually.")
+            result = callback_server.wait(timeout_seconds)
 
-    if result.error:
-        raise SetupError(f"setup was rejected: {result.error}")
-    if not result.code:
-        raise SetupError("setup callback did not include a code")
-    if result.state != state:
-        raise SetupError("setup callback state did not match")
+    code = validate_callback_result(result, expected_state=state)
 
     token = exchange_connection_token(
         app_url=app_url,
-        code=result.code,
+        code=code,
         redirect_uri=redirect_uri,
         code_verifier=pkce.verifier,
         allow_insecure=allow_insecure,
     )
     persist_setup_result(token, plugin_key=plugin_key, api_key_env=api_key_env, app_url=setup_url)
     return token
+
+
+def manual_redirect_uri(*, callback_host: str, callback_port: int) -> str:
+    port = callback_port or MANUAL_CALLBACK_PORT
+    _validate_callback_endpoint(callback_host, port)
+    return f"http://{callback_host}:{port}/callback"
+
+
+def parse_manual_callback(value: str, *, expected_redirect_uri: str) -> CallbackResult:
+    value = value.strip()
+    if not value or len(value) > MAX_CALLBACK_URL_LENGTH or any(ord(char) < 32 for char in value):
+        raise SetupError("manual callback URL is invalid")
+
+    try:
+        parsed = urlparse(value)
+        expected = urlparse(expected_redirect_uri)
+        if (
+            parsed.scheme != expected.scheme
+            or parsed.hostname != expected.hostname
+            or parsed.port != expected.port
+            or parsed.path != expected.path
+            or parsed.params
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise SetupError("manual callback URL does not match the expected redirect URI")
+        query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=8)
+    except ValueError as exc:
+        raise SetupError("manual callback URL is invalid") from exc
+
+    state = _required_query_value(query, "state")
+    code = _optional_query_value(query, "code")
+    error = _optional_query_value(query, "error")
+    if bool(code) == bool(error):
+        raise SetupError("manual callback must contain exactly one of code or error")
+    return CallbackResult(code=code, state=state, error=error)
+
+
+def validate_callback_result(result: CallbackResult, *, expected_state: str) -> str:
+    if not result.state or not hmac.compare_digest(result.state, expected_state):
+        raise SetupError("setup callback state did not match")
+    if result.error:
+        raise SetupError(f"setup was rejected: {result.error}")
+    if not result.code:
+        raise SetupError("setup callback did not include a code")
+    return result.code
+
+
+def _manual_callback_result(
+    auth_url: str,
+    redirect_uri: str,
+    open_browser_enabled: bool,
+    open_browser: Callable[[str], bool],
+    read_callback: Callable[[str], str],
+) -> CallbackResult:
+    print(f"Open Smart Numbers setup in your browser:\n{auth_url}")
+    if open_browser_enabled and not open_browser(auth_url):
+        print("Could not open a browser automatically. Open the URL above manually.")
+    print(
+        "After approval, the browser will fail to load the loopback callback. "
+        "Copy the complete URL from its address bar and paste it below."
+    )
+    try:
+        value = read_callback("Paste callback URL: ")
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise SetupError("manual setup was cancelled") from exc
+    return parse_manual_callback(value, expected_redirect_uri=redirect_uri)
 
 
 def create_pkce_pair() -> PkcePair:
@@ -273,10 +357,7 @@ class CallbackServer:
         redirect_host: str = "127.0.0.1",
         port: int = 0,
     ) -> None:
-        if not _is_loopback_host(redirect_host):
-            raise SetupError("callback host must be a loopback hostname or address")
-        if not 0 <= port <= 65535:
-            raise SetupError("callback port must be between 0 and 65535")
+        _validate_callback_endpoint(redirect_host, port)
         self._redirect_host = redirect_host
         self._server = _CallbackHTTPServer((bind_host, port), _CallbackHandler)
         self._thread = threading.Thread(target=self._server.serve_forever, name="transcript-listener-setup-callback", daemon=True)
@@ -348,6 +429,32 @@ def _is_loopback_http(app_url: str) -> bool:
 
 def _is_loopback_host(host: str | None) -> bool:
     return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _validate_callback_endpoint(host: str, port: int) -> None:
+    if not _is_loopback_host(host):
+        raise SetupError("callback host must be a loopback hostname or address")
+    if not 0 <= port <= 65535:
+        raise SetupError("callback port must be between 0 and 65535")
+
+
+def _required_query_value(query: dict[str, list[str]], key: str) -> str:
+    value = _optional_query_value(query, key)
+    if not value:
+        raise SetupError(f"manual callback did not include {key}")
+    return value
+
+
+def _optional_query_value(query: dict[str, list[str]], key: str) -> str | None:
+    values = query.get(key, [])
+    if len(values) > 1:
+        raise SetupError(f"manual callback included multiple {key} values")
+    if not values:
+        return None
+    value = values[0]
+    if not value:
+        raise SetupError(f"manual callback included an empty {key}")
+    return value
 
 
 def _validate_websocket_url(websocket_url: str, *, allow_insecure: bool) -> None:

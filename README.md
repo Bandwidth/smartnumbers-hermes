@@ -30,6 +30,24 @@ The browser setup flow obtains an API key, saves it to Hermes' `.env` as
 `TRANSCRIPT_LISTENER_API_KEY`, enables the listener, and writes the connection
 settings under `plugins.entries.smartnumbers`.
 
+### Remote Or Docker Setup
+
+When Hermes and the browser run on different machines, use manual callback
+paste instead of publishing a temporary callback port:
+
+```bash
+hermes smartnumbers setup --manual-paste --no-browser
+```
+
+Open the printed URL in a browser, approve the connection, then copy the
+complete redirect URL from the browser address bar and paste it into the
+Hermes terminal. The browser showing a connection error for the loopback
+callback is expected. Hermes validates the callback state and exchanges the
+one-time code using the same PKCE flow as local setup.
+
+Manual setup uses `http://127.0.0.1:3021/callback` by default. Set a different
+browser-visible loopback port with `--callback-port` if needed.
+
 Restart the gateway to load the saved connection:
 
 ```bash

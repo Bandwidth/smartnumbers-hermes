@@ -6,6 +6,16 @@
    hermes smartnumbers setup
    ```
 
+   If the browser runs on a different machine or Hermes runs in Docker, use:
+
+   ```sh
+   hermes smartnumbers setup --manual-paste --no-browser
+   ```
+
+   Open the printed URL in the browser. After approval, copy the complete
+   loopback redirect URL from the browser address bar and paste it into the
+   terminal. A browser connection error for that loopback URL is expected.
+
 2. Git installation does not install Python dependencies. In the Python
    environment that runs Hermes, install `websockets` if it is unavailable:
 

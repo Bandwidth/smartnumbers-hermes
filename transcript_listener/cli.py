@@ -41,10 +41,18 @@ def setup_cli_parser(parser: ArgumentParser) -> None:
     )
     setup.add_argument("--callback-host", default=None, help="Loopback hostname used in the browser callback URL")
     setup.add_argument(
-        "--callback-port", type=int, default=None, help="Temporary callback port; 0 selects an available port"
+        "--callback-port",
+        type=int,
+        default=None,
+        help="Callback port; 0 selects an available port (manual paste defaults to 3021)",
     )
     setup.add_argument(
         "--no-browser", action="store_true", help="Print the setup URL without attempting to open a browser"
+    )
+    setup.add_argument(
+        "--manual-paste",
+        action="store_true",
+        help="Complete setup by pasting the final browser redirect URL",
     )
     setup.set_defaults(func=handle_cli)
 
@@ -93,6 +101,7 @@ def _setup(args: Namespace) -> None:
             open_browser_enabled=not (
                 bool(getattr(args, "no_browser", False)) or _env_flag(NO_BROWSER_ENV)
             ),
+            manual_paste=bool(getattr(args, "manual_paste", False)),
         )
     except SetupError as exc:
         raise SystemExit(f"Smartnumbers setup failed: {exc}") from exc

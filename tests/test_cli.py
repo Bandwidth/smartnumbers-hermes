@@ -45,6 +45,7 @@ def test_setup_forwards_container_callback_options(monkeypatch):
         "callback_host": "localhost",
         "callback_port": 3021,
         "open_browser_enabled": False,
+        "manual_paste": False,
     }
 
 
@@ -78,4 +79,25 @@ def test_local_setup_uses_container_environment_defaults(monkeypatch):
         "callback_host": "localhost",
         "callback_port": 3021,
         "open_browser_enabled": False,
+        "manual_paste": False,
     }
+
+
+def test_setup_forwards_manual_paste_option(monkeypatch):
+    parser = ArgumentParser()
+    cli.setup_cli_parser(parser)
+    args = parser.parse_args(["setup", "--manual-paste", "--no-browser"])
+    captured = {}
+
+    monkeypatch.setattr(cli, "load_plugin_config", lambda plugin_key: config_from_mapping({}))
+    monkeypatch.setattr(
+        cli,
+        "run_browser_setup",
+        lambda **kwargs: captured.update(kwargs=kwargs)
+        or SetupToken("bwa_key_test", "bwa_key_", "wss://smart.example/ws/hermes", ()),
+    )
+
+    cli.handle_cli(args)
+
+    assert captured["kwargs"]["manual_paste"] is True
+    assert captured["kwargs"]["open_browser_enabled"] is False

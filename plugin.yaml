@@ -1,0 +1,12 @@
+manifest_version: 1
+name: smartnumbers
+version: "0.1.0"
+description: Import Smartnumbers transcripts into Hermes memory and reference history.
+author: Bandwidth
+provides_tools:
+  - transcript_search
+provides_hooks: []
+requires_env:
+  - name: TRANSCRIPT_LISTENER_API_KEY
+    description: Labs Auth API key for Smartnumbers transcript events
+    secret: true

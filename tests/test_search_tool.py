@@ -19,3 +19,4 @@ def test_transcript_search_tool_returns_json(tmp_path):
     assert payload["success"] is True
     assert payload["count"] == 1
     assert payload["results"][0]["external_session_id"] == "conv_001"
+    assert payload["results"][0]["event_received_at"]

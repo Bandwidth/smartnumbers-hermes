@@ -7,9 +7,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+DEFAULT_APP_URL = "https://smartnumbers.labs.bandwidth.com"
+DEFAULT_WEBSOCKET_URL = "wss://connections.smartnumbers.labs.bandwidth.com/ws/hermes"
+
+
 @dataclass(frozen=True)
 class TranscriptListenerConfig:
     stream_url: str = ""
+    app_url: str = DEFAULT_APP_URL
+    key_prefix: str = ""
     user_speaker: str = "TO"
     run_listener: bool = False
     archive_raw: bool = True
@@ -24,6 +30,9 @@ class TranscriptListenerConfig:
     download_timeout_seconds: int = 15
     max_download_bytes: int = 5 * 1024 * 1024
     allow_insecure_transcript_urls: bool = False
+    auto_review_transcripts: bool = True
+    auto_review_deliver: str = "local"
+    auto_review_toolsets: tuple[str, ...] | None = None
 
 
 def load_plugin_config(plugin_key: str = "smartnumbers") -> TranscriptListenerConfig:
@@ -47,6 +56,8 @@ def config_from_mapping(entry: Mapping[str, Any]) -> TranscriptListenerConfig:
     storage_path = entry.get("storage_path")
     return TranscriptListenerConfig(
         stream_url=_str(entry.get("stream_url")),
+        app_url=_str(entry.get("app_url"), DEFAULT_APP_URL),
+        key_prefix=_str(entry.get("key_prefix")),
         user_speaker=_str(entry.get("user_speaker"), "TO"),
         run_listener=_bool(entry.get("run_listener"), False),
         archive_raw=_bool(entry.get("archive_raw"), True),
@@ -61,6 +72,9 @@ def config_from_mapping(entry: Mapping[str, Any]) -> TranscriptListenerConfig:
         download_timeout_seconds=_int(entry.get("download_timeout_seconds"), 15),
         max_download_bytes=_int(entry.get("max_download_bytes"), 5 * 1024 * 1024),
         allow_insecure_transcript_urls=_bool(entry.get("allow_insecure_transcript_urls"), False),
+        auto_review_transcripts=_bool(entry.get("auto_review_transcripts"), True),
+        auto_review_deliver=_str(entry.get("auto_review_deliver"), "local"),
+        auto_review_toolsets=_str_tuple(entry.get("auto_review_toolsets")),
     )
 
 
@@ -90,3 +104,16 @@ def _int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _str_tuple(value: Any) -> tuple[str, ...] | None:
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+        return tuple(item for item in items if item) or None
+    if isinstance(value, list):
+        items = [item.strip() for item in value if isinstance(item, str)]
+        return tuple(item for item in items if item) or None
+    if isinstance(value, tuple):
+        items = [item.strip() for item in value if isinstance(item, str)]
+        return tuple(item for item in items if item) or None
+    return None

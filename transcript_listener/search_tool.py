@@ -13,7 +13,8 @@ TRANSCRIPT_SEARCH_SCHEMA = {
     "description": (
         "Search external conversation transcripts imported by the transcript listener. "
         "Use this for direct lookup in raw external transcript history, speaker filtering, "
-        "or provenance-heavy retrieval."
+        "recent call lookup, or provenance-heavy retrieval. Results are newest-first by "
+        "the time Hermes received the transcript event."
     ),
     "parameters": {
         "type": "object",
@@ -21,8 +22,8 @@ TRANSCRIPT_SEARCH_SCHEMA = {
             "query": {"type": "string", "description": "Text to search for in transcript turns."},
             "external_session_id": {"type": "string", "description": "Limit search to one external conversation id."},
             "speaker": {"type": "string", "description": "Filter by speaker id or speaker label."},
-            "since": {"type": "string", "description": "Optional ISO timestamp lower bound."},
-            "until": {"type": "string", "description": "Optional ISO timestamp upper bound."},
+            "since": {"type": "string", "description": "Optional event_received_at ISO timestamp lower bound."},
+            "until": {"type": "string", "description": "Optional event_received_at ISO timestamp upper bound."},
             "limit": {"type": "integer", "description": "Maximum results to return, clamped to 1-50.", "default": 10},
         },
         "required": [],

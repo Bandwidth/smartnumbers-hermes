@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-smartnumbers"
+version = "0.1.0"
+description = "Hermes plugin for ingesting Smartnumbers conversation transcripts"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "websockets>=14,<16",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[project.entry-points."hermes_agent.plugins"]
+smartnumbers = "transcript_listener.plugin"
+
+[tool.setuptools]
+packages = ["transcript_listener"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

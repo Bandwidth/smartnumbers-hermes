@@ -113,7 +113,7 @@ cron tool access as the existing automatic review job.
 
 `transcript_review_config` retains its existing actions:
 
-- `show`, `set`, and `clear` manage the backward-compatible default callback.
+- `show`, `set`, and `clear` manage the `default-review` callback.
 
 It also supports independent callbacks:
 
@@ -128,9 +128,6 @@ request:
 ```text
 Whenever I agree to attend an event on a call, add it to my calendar.
 ```
-
-Existing saved review instructions are migrated to the `default-review`
-callback when the archive is opened.
 
 ### Named Call Commands
 
@@ -169,6 +166,13 @@ Only a named command from the configured user speaker or an already registered
 callback creates an action goal. When a user intentionally grants a generic
 callback broad Hermes tool access, its instructions should be reviewed as
 carefully as any other autonomous Hermes automation.
+
+Durable-fact extraction accepts facts stated directly by the configured user
+speaker. A fact stated by another participant is eligible only when a later
+turn from the configured user speaker clearly agrees with or verifies it. Each
+fact must cite the numbered assertion turn and exact source text; caller facts
+must also cite the later user-confirmation turn. Unconfirmed caller statements
+remain available through transcript search but are not written to memory.
 
 `transcript_search` returns `source_trust: "external-untrusted"` and supports
 pagination through `offset` and `next_offset` so long calls can be retrieved

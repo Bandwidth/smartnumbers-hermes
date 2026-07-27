@@ -51,7 +51,6 @@ class TranscriptCallback:
     name: str
     instructions: str
     enabled: bool
-    revision: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -59,7 +58,6 @@ class TranscriptCallback:
             "name": self.name,
             "instructions": self.instructions,
             "enabled": self.enabled,
-            "revision": self.revision,
         }
 
 
@@ -135,7 +133,6 @@ class TranscriptArchive:
                     name TEXT NOT NULL,
                     instructions TEXT NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
-                    revision INTEGER NOT NULL DEFAULT 1,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
@@ -184,8 +181,8 @@ class TranscriptArchive:
         now = time.time()
         conn.execute(
             """
-            INSERT INTO transcript_callbacks (callback_id, name, instructions, enabled, revision, created_at, updated_at)
-            VALUES (?, ?, ?, 1, 1, ?, ?)
+            INSERT INTO transcript_callbacks (callback_id, name, instructions, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?)
             """,
             (LEGACY_CALLBACK_ID, "Default transcript review", str(legacy["value"]).strip(), now, now),
         )
@@ -316,14 +313,14 @@ class TranscriptArchive:
         where = "WHERE enabled = 1" if enabled_only else ""
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT callback_id, name, instructions, enabled, revision FROM transcript_callbacks {where} ORDER BY created_at, callback_id"
+                f"SELECT callback_id, name, instructions, enabled FROM transcript_callbacks {where} ORDER BY created_at, callback_id"
             ).fetchall()
         return [_callback_from_row(row) for row in rows]
 
     def get_callback(self, callback_id: str) -> TranscriptCallback | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT callback_id, name, instructions, enabled, revision FROM transcript_callbacks WHERE callback_id = ?",
+                "SELECT callback_id, name, instructions, enabled FROM transcript_callbacks WHERE callback_id = ?",
                 (callback_id,),
             ).fetchone()
         return _callback_from_row(row) if row else None
@@ -341,23 +338,22 @@ class TranscriptArchive:
         instructions = _bounded_text(instructions, 12000, "callback instructions")
         now = time.time()
         with self._connect() as conn:
-            existing = conn.execute("SELECT revision, created_at FROM transcript_callbacks WHERE callback_id = ?", (callback_id,)).fetchone()
-            revision = int(existing["revision"]) + 1 if existing else 1
+            existing = conn.execute("SELECT created_at FROM transcript_callbacks WHERE callback_id = ?", (callback_id,)).fetchone()
             created_at = float(existing["created_at"]) if existing else now
             conn.execute(
                 """
                 INSERT OR REPLACE INTO transcript_callbacks (
-                    callback_id, name, instructions, enabled, revision, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    callback_id, name, instructions, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (callback_id, name, instructions, int(enabled), revision, created_at, now),
+                (callback_id, name, instructions, int(enabled), created_at, now),
             )
-        return TranscriptCallback(callback_id, name, instructions, enabled, revision)
+        return TranscriptCallback(callback_id, name, instructions, enabled)
 
     def set_callback_enabled(self, callback_id: str, enabled: bool) -> TranscriptCallback | None:
         with self._connect() as conn:
             conn.execute(
-                "UPDATE transcript_callbacks SET enabled = ?, revision = revision + 1, updated_at = ? WHERE callback_id = ?",
+                "UPDATE transcript_callbacks SET enabled = ?, updated_at = ? WHERE callback_id = ?",
                 (int(enabled), time.time(), callback_id),
             )
         return self.get_callback(callback_id)
@@ -579,7 +575,6 @@ def _callback_from_row(row: sqlite3.Row) -> TranscriptCallback:
         name=str(row["name"]),
         instructions=str(row["instructions"]),
         enabled=bool(row["enabled"]),
-        revision=int(row["revision"]),
     )
 
 

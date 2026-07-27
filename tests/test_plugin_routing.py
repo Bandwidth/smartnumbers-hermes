@@ -231,7 +231,7 @@ def test_auto_review_dispatches_one_shot_cron_job_when_instructions_exist(monkey
     }
 
 
-def test_auto_review_suppresses_duplicate_dispatch(tmp_path):
+def test_auto_review_suppresses_duplicate_dispatch_after_callback_update(tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     archive.set_review_instructions("Review according to my saved policy.")
     config = config_from_mapping(
@@ -244,6 +244,7 @@ def test_auto_review_suppresses_duplicate_dispatch(tmp_path):
     ctx = FakeDispatchContext()
 
     first_ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+    archive.set_review_instructions("Use the updated review policy.")
     second_ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
 
     assert len(ctx.calls) == 1

@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 
 import pytest
 
@@ -78,6 +79,53 @@ def test_callback_registry_migrates_legacy_instruction_and_paginates_search(tmp_
 
     assert callbacks[0].callback_id == "default-review"
     assert callbacks[0].instructions == "Create follow-up tasks."
+
+
+def test_callback_registry_has_no_revision_concept(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    callback = archive.upsert_callback(
+        callback_id="calendar",
+        name="Calendar",
+        instructions="Add agreed events.",
+    )
+
+    assert callback.to_dict() == {
+        "id": "calendar",
+        "name": "Calendar",
+        "instructions": "Add agreed events.",
+        "enabled": True,
+    }
+    with archive._connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(transcript_callbacks)")}
+    assert "revision" not in columns
+
+
+def test_callback_registry_remains_compatible_with_legacy_revision_column(tmp_path):
+    path = tmp_path / "transcripts.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE transcript_callbacks (
+                callback_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                instructions TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                revision INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+
+    archive = TranscriptArchive(path)
+    callback = archive.upsert_callback(
+        callback_id="calendar",
+        name="Calendar",
+        instructions="Add agreed events.",
+    )
+
+    assert callback.to_dict()["id"] == "calendar"
+    assert "revision" not in callback.to_dict()
 
 
 def test_cron_callback_mutation_requires_named_command_token(monkeypatch, tmp_path):

@@ -350,7 +350,7 @@ def _maybe_dispatch_auto_review(
     errors: list[str] = []
     if callbacks:
         callback_key = _execution_key(
-            "callbacks", transcript.conversation_id, ",".join(f"{item.callback_id}:{item.revision}" for item in callbacks)
+            "callbacks", transcript.conversation_id, ",".join(item.callback_id for item in callbacks)
         )
         if archive.claim_execution(
             execution_key=callback_key,

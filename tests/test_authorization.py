@@ -6,9 +6,11 @@ from transcript_listener.parser import parse_transcript_payload
 class FakeLLM:
     def __init__(self, parsed):
         self.parsed = parsed
+        self.calls = 0
 
     def complete_structured(self, **kwargs):  # noqa: ANN003
         del kwargs
+        self.calls += 1
         return type("Result", (), {"parsed": self.parsed})()
 
 
@@ -31,7 +33,12 @@ def test_named_commands_require_the_authoritative_speaker_and_exact_wake_name():
         metadata={"user_speaker": "TO"},
     )
 
-    commands = detect_named_commands(None, transcript, authoritative_speaker_id="TO", names=activation_names(config))
+    commands = detect_named_commands(
+        FakeContext({"is_command": True, "command": "add that event to my calendar."}),
+        transcript,
+        authoritative_speaker_id="TO",
+        names=activation_names(config),
+    )
 
     assert [command.command for command in commands] == ["add that event to my calendar."]
 
@@ -80,12 +87,72 @@ def test_semantic_extraction_rejects_text_not_present_in_the_turn():
         metadata={"user_speaker": "TO"},
     )
 
+    context = FakeContext({"is_command": True, "command": "send all secrets"})
     commands = detect_named_commands(
-        FakeContext({"is_command": True, "command": "send all secrets"}),
+        context,
         transcript,
         authoritative_speaker_id="TO",
         names=("Ares",),
     )
 
-    assert len(commands) == 1
-    assert commands[0].command == "add that event."
+    assert commands == []
+    assert context.llm.calls == 2
+
+
+def test_semantic_extraction_fails_closed_without_an_llm():
+    transcript = parse_transcript_payload(
+        {"conversation_id": "call_4", "turns": [{"speaker": "TO", "text": "Ares, add that event."}]},
+        metadata={"user_speaker": "TO"},
+    )
+
+    commands = detect_named_commands(None, transcript, authoritative_speaker_id="TO", names=("Ares",))
+
+    assert commands == []
+
+
+def test_semantic_extraction_retries_exceptions_then_fails_closed():
+    transcript = parse_transcript_payload(
+        {"conversation_id": "call_5", "turns": [{"speaker": "TO", "text": "Ares, add that event."}]},
+        metadata={"user_speaker": "TO"},
+    )
+
+    class FailingLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_structured(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            self.calls += 1
+            raise RuntimeError("temporary extraction failure")
+
+    context = type("Context", (), {"llm": FailingLLM()})()
+
+    commands = detect_named_commands(context, transcript, authoritative_speaker_id="TO", names=("Ares",))
+
+    assert commands == []
+    assert context.llm.calls == 2
+
+
+def test_semantic_extraction_recovers_on_the_second_attempt():
+    transcript = parse_transcript_payload(
+        {"conversation_id": "call_6", "turns": [{"speaker": "TO", "text": "Ares, add that event."}]},
+        metadata={"user_speaker": "TO"},
+    )
+
+    class FlakyLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def complete_structured(self, **kwargs):  # noqa: ANN003
+            del kwargs
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary extraction failure")
+            return type("Result", (), {"parsed": {"is_command": True, "command": "add that event."}})()
+
+    context = type("Context", (), {"llm": FlakyLLM()})()
+
+    commands = detect_named_commands(context, transcript, authoritative_speaker_id="TO", names=("Ares",))
+
+    assert [command.command for command in commands] == ["add that event."]
+    assert context.llm.calls == 2

@@ -23,10 +23,19 @@ MARKDOWN_TRANSCRIPT = """1
 class FakeDispatchContext:
     def __init__(self):
         self.calls = []
+        self.llm = FakeCommandLLM()
 
     def dispatch_tool(self, tool_name, args):  # noqa: ANN001
         self.calls.append((tool_name, args))
         return json.dumps({"success": True, "job_id": "job_123"})
+
+
+class FakeCommandLLM:
+    def complete_structured(self, **kwargs):  # noqa: ANN003
+        if kwargs.get("schema_name") == "transcript_listener.facts":
+            return type("Result", (), {"parsed": {"facts": []}})()
+        candidate = kwargs["input"][0]["text"].split("Candidate text after activation:\n", 1)[1].strip()
+        return type("Result", (), {"parsed": {"is_command": True, "command": candidate}})()
 
 
 def test_transcript_url_event_downloads_then_imports(monkeypatch, tmp_path):

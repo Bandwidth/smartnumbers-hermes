@@ -121,9 +121,9 @@ def _is_direct_address(text: str, start: int, end: int) -> bool:
 def _extract_command(ctx: Any | None, turn_text: str, activation: str, candidate_text: str) -> str:
     if not candidate_text:
         return ""
+    if ctx is None or not hasattr(ctx, "llm"):
+        return ""
     for attempt in range(2):
-        if ctx is None or not hasattr(ctx, "llm"):
-            return candidate_text.strip()
         instructions = COMMAND_EXTRACTION_INSTRUCTIONS
         if attempt:
             instructions += " Your command value must be an exact contiguous copy from the candidate text."
@@ -143,15 +143,13 @@ def _extract_command(ctx: Any | None, turn_text: str, activation: str, candidate
                 max_tokens=500,
             )
         except Exception:
-            break
+            continue
         parsed = result.parsed if isinstance(result.parsed, dict) else {}
         command = parsed.get("command") if isinstance(parsed, dict) else ""
         if parsed.get("is_command") is True and isinstance(command, str):
             command = command.strip()
             if command and command in candidate_text:
                 return command
-            if not command:
-                return ""
         elif parsed.get("is_command") is False:
             return ""
-    return candidate_text.strip()
+    return ""

@@ -37,7 +37,7 @@ class TranscriptListenerConfig:
     user_speaker_by_direction: tuple[tuple[str, str], ...] = (("inbound", "TO"), ("outbound", "FROM"))
     trust_event_direction: bool = False
     activation_names: tuple[str, ...] = ()
-    max_websocket_message_bytes: int | None = None
+    max_websocket_message_bytes: int = 1024 * 1024
     max_turns: int | None = None
     max_turn_chars: int | None = None
     max_transcript_chars: int | None = None
@@ -90,7 +90,12 @@ def config_from_mapping(entry: Mapping[str, Any]) -> TranscriptListenerConfig:
         user_speaker_by_direction=_speaker_mapping(entry.get("user_speaker_by_direction"), fallback=_str(entry.get("user_speaker"), "TO")),
         trust_event_direction=_bool(entry.get("trust_event_direction"), False),
         activation_names=_str_tuple(entry.get("activation_names")) or (),
-        max_websocket_message_bytes=_optional_bounded_int(entry.get("max_websocket_message_bytes"), minimum=1024, maximum=1024 * 1024 * 1024),
+        max_websocket_message_bytes=_bounded_int(
+            entry.get("max_websocket_message_bytes"),
+            1024 * 1024,
+            minimum=1024,
+            maximum=1024 * 1024 * 1024,
+        ),
         max_turns=_optional_bounded_int(entry.get("max_turns"), minimum=1, maximum=1_000_000),
         max_turn_chars=_optional_bounded_int(entry.get("max_turn_chars"), minimum=128, maximum=100_000_000),
         max_transcript_chars=_optional_bounded_int(entry.get("max_transcript_chars"), minimum=1024, maximum=1024 * 1024 * 1024),

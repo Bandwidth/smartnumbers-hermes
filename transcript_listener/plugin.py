@@ -119,7 +119,7 @@ def _handle_websocket_message(
     config: TranscriptListenerConfig,
     payload: str,
 ) -> dict[str, Any] | None:
-    if config.max_websocket_message_bytes is not None and len(payload.encode("utf-8", errors="replace")) > config.max_websocket_message_bytes:
+    if len(payload.encode("utf-8", errors="replace")) > config.max_websocket_message_bytes:
         ack = _new_ack(event_id=None)
         _add_ack_error(ack, "parse", "WebSocket message exceeds configured size limit")
         return _finalize_ack(ack)

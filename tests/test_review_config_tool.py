@@ -33,3 +33,85 @@ def test_review_config_tool_requires_instructions_for_set(tmp_path):
     assert result["success"] is False
     assert result["auto_review_enabled"] is False
     assert "instructions is required" in result["error"]
+
+
+def test_register_requires_new_id_and_update_requires_existing_id(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    handler = make_transcript_review_config_handler(archive)
+
+    registered = json.loads(
+        handler(
+            {
+                "action": "register",
+                "id": "My Calendar",
+                "name": "Calendar",
+                "instructions": "Add agreed events.",
+                "enabled": False,
+            }
+        )
+    )
+    duplicate = json.loads(
+        handler(
+            {
+                "action": "register",
+                "id": "my-calendar",
+                "name": "Replacement",
+                "instructions": "Replace the existing callback.",
+            }
+        )
+    )
+    missing = json.loads(
+        handler(
+            {
+                "action": "update",
+                "id": "missing",
+                "name": "Missing",
+                "instructions": "This must not be created.",
+            }
+        )
+    )
+    updated = json.loads(
+        handler(
+            {
+                "action": "update",
+                "id": "My Calendar",
+                "name": "Calendar follow-up",
+                "instructions": "Add only confirmed events.",
+            }
+        )
+    )
+
+    assert registered["success"] is True
+    assert registered["callbacks"][0]["id"] == "my-calendar"
+    assert duplicate == {"success": False, "callbacks": [], "error": "callback already exists"}
+    assert missing == {"success": False, "callbacks": [], "error": "callback was not found"}
+    assert updated["success"] is True
+    assert updated["callbacks"][0] == {
+        "id": "my-calendar",
+        "name": "Calendar follow-up",
+        "instructions": "Add only confirmed events.",
+        "enabled": False,
+    }
+    assert archive.get_callback("missing") is None
+
+
+def test_callback_mutations_normalize_ids_consistently(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    handler = make_transcript_review_config_handler(archive)
+    handler(
+        {
+            "action": "register",
+            "id": "My Calendar",
+            "name": "Calendar",
+            "instructions": "Add agreed events.",
+            "enabled": False,
+        }
+    )
+
+    enabled = json.loads(handler({"action": "enable", "id": "My Calendar"}))
+    removed = json.loads(handler({"action": "remove", "id": "My Calendar"}))
+
+    assert enabled["success"] is True
+    assert enabled["callbacks"][0]["enabled"] is True
+    assert removed == {"success": True, "callbacks": []}
+    assert archive.get_callback("my-calendar") is None

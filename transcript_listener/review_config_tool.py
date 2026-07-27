@@ -21,7 +21,7 @@ TRANSCRIPT_REVIEW_CONFIG_SCHEMA = {
             "action": {
                 "type": "string",
                 "enum": ["show", "set", "clear", "list", "register", "update", "enable", "disable", "remove"],
-                "description": "Legacy show/set/clear manage the default callback. register/update/enable/disable/remove manage independent callbacks.",
+                "description": "show/set/clear manage the default callback. register creates a new independent callback; update requires an existing callback.",
             },
             "instructions": {
                 "type": "string",
@@ -66,6 +66,10 @@ def make_transcript_review_config_handler(archive: TranscriptArchive):
                 if not callback_id or not name or not instructions:
                     return _callbacks_response(False, error="id, name, and instructions are required")
                 existing = archive.get_callback(callback_id)
+                if action == "register" and existing is not None:
+                    return _callbacks_response(False, error="callback already exists")
+                if action == "update" and existing is None:
+                    return _callbacks_response(False, error="callback was not found")
                 callback = archive.upsert_callback(
                     callback_id=callback_id,
                     name=name,

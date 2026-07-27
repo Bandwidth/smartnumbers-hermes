@@ -271,6 +271,7 @@ class TranscriptArchive:
         return [_callback_from_row(row) for row in rows]
 
     def get_callback(self, callback_id: str) -> TranscriptCallback | None:
+        callback_id = _callback_id(callback_id)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT callback_id, name, instructions, enabled FROM transcript_callbacks WHERE callback_id = ?",
@@ -304,6 +305,7 @@ class TranscriptArchive:
         return TranscriptCallback(callback_id, name, instructions, enabled)
 
     def set_callback_enabled(self, callback_id: str, enabled: bool) -> TranscriptCallback | None:
+        callback_id = _callback_id(callback_id)
         with self._connect() as conn:
             conn.execute(
                 "UPDATE transcript_callbacks SET enabled = ?, updated_at = ? WHERE callback_id = ?",
@@ -312,6 +314,7 @@ class TranscriptArchive:
         return self.get_callback(callback_id)
 
     def remove_callback(self, callback_id: str) -> bool:
+        callback_id = _callback_id(callback_id)
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM transcript_callbacks WHERE callback_id = ?", (callback_id,))
         return cursor.rowcount > 0

@@ -118,8 +118,8 @@ cron tool access as the existing automatic review job.
 It also supports independent callbacks:
 
 - `list`
-- `register` with `id`, `name`, and `instructions`
-- `update` with `id`, `name`, and `instructions`
+- `register` with a new `id`, `name`, and `instructions`
+- `update` with an existing `id`, `name`, and `instructions`
 - `enable`, `disable`, and `remove` with `id`
 
 For example, Hermes can register an arbitrary callback after a normal user

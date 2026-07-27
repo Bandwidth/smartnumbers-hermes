@@ -17,8 +17,7 @@ from .models import NormalizedTranscript
 from .renderer import render_for_sessiondb
 
 
-REVIEW_INSTRUCTIONS_SETTING = "review_instructions"
-LEGACY_CALLBACK_ID = "default-review"
+DEFAULT_CALLBACK_ID = "default-review"
 
 
 @dataclass(frozen=True)
@@ -122,12 +121,6 @@ class TranscriptArchive:
                 CREATE INDEX IF NOT EXISTS idx_turns_speaker ON turns(speaker);
                 CREATE INDEX IF NOT EXISTS idx_turns_timestamp ON turns(timestamp);
 
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at REAL NOT NULL
-                );
-
                 CREATE TABLE IF NOT EXISTS transcript_callbacks (
                     callback_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -169,23 +162,6 @@ class TranscriptArchive:
                 if column not in columns:
                     conn.execute(f"ALTER TABLE transcripts ADD COLUMN {column} TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_event_received_at ON transcripts(event_received_at)")
-            self._migrate_legacy_review_instruction(conn)
-
-    def _migrate_legacy_review_instruction(self, conn: sqlite3.Connection) -> None:
-        """Preserve existing one-string configuration as the default callback."""
-
-        existing = conn.execute("SELECT 1 FROM transcript_callbacks LIMIT 1").fetchone()
-        legacy = conn.execute("SELECT value FROM settings WHERE key = ?", (REVIEW_INSTRUCTIONS_SETTING,)).fetchone()
-        if existing or legacy is None or not str(legacy["value"]).strip():
-            return
-        now = time.time()
-        conn.execute(
-            """
-            INSERT INTO transcript_callbacks (callback_id, name, instructions, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, 1, ?, ?)
-            """,
-            (LEGACY_CALLBACK_ID, "Default transcript review", str(legacy["value"]).strip(), now, now),
-        )
 
     def save_transcript(
         self,
@@ -270,44 +246,21 @@ class TranscriptArchive:
                 (state_session_id, time.time(), conversation_id),
             )
 
-    def get_setting(self, key: str, default: str = "") -> str:
-        with self._connect() as conn:
-            row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        if row is None:
-            return default
-        return str(row["value"])
-
-    def set_setting(self, key: str, value: str) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO settings (key, value, updated_at)
-                VALUES (?, ?, ?)
-                """,
-                (key, value, time.time()),
-            )
-
-    def delete_setting(self, key: str) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
-
     def get_review_instructions(self) -> str:
-        callback = self.get_callback(LEGACY_CALLBACK_ID)
-        return callback.instructions if callback and callback.enabled else self.get_setting(REVIEW_INSTRUCTIONS_SETTING).strip()
+        callback = self.get_callback(DEFAULT_CALLBACK_ID)
+        return callback.instructions if callback and callback.enabled else ""
 
     def set_review_instructions(self, instructions: str) -> None:
         instructions = instructions.strip()
         if instructions:
-            self.set_setting(REVIEW_INSTRUCTIONS_SETTING, instructions)
             self.upsert_callback(
-                callback_id=LEGACY_CALLBACK_ID,
+                callback_id=DEFAULT_CALLBACK_ID,
                 name="Default transcript review",
                 instructions=instructions,
                 enabled=True,
             )
         else:
-            self.delete_setting(REVIEW_INSTRUCTIONS_SETTING)
-            self.remove_callback(LEGACY_CALLBACK_ID)
+            self.remove_callback(DEFAULT_CALLBACK_ID)
 
     def list_callbacks(self, *, enabled_only: bool = False) -> list[TranscriptCallback]:
         where = "WHERE enabled = 1" if enabled_only else ""

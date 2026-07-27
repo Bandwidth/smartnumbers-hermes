@@ -70,15 +70,19 @@ def test_fact_extraction_processes_every_long_turn_in_chunks():
     assert len(calls) > 1
 
 
-def test_callback_registry_migrates_legacy_instruction_and_paginates_search(tmp_path):
+def test_default_review_uses_callback_registry_without_a_settings_table(tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
-    archive.set_setting("review_instructions", "Create follow-up tasks.")
-    archive._init_schema()
+    archive.set_review_instructions("Create follow-up tasks.")
 
     callbacks = archive.list_callbacks()
 
     assert callbacks[0].callback_id == "default-review"
     assert callbacks[0].instructions == "Create follow-up tasks."
+    with archive._connect() as conn:
+        settings_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'"
+        ).fetchone()
+    assert settings_table is None
 
 
 def test_callback_registry_has_no_revision_concept(tmp_path):

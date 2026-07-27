@@ -21,8 +21,17 @@ FACT_EXTRACTION_SCHEMA = {
                     "content": {"type": "string"},
                     "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                     "source": {"type": "string"},
+                    "assertion_turn_index": {"type": "integer"},
+                    "confirmation_turn_index": {"type": "integer"},
                 },
-                "required": ["target", "content", "confidence", "source"],
+                "required": [
+                    "target",
+                    "content",
+                    "confidence",
+                    "source",
+                    "assertion_turn_index",
+                    "confirmation_turn_index",
+                ],
                 "additionalProperties": False,
             },
         }
@@ -36,7 +45,12 @@ EXTRACTION_INSTRUCTIONS = (
     "Extract high-confidence durable facts from this external conversation transcript. "
     "Use target='user' for user identity, preferences, goals, constraints, and communication style. "
     "Use target='memory' for project context, environment facts, workflows, and recurring task context. "
-    "Keep each fact concise, directly supported by transcript text, and useful in future assistance."
+    "Keep each fact concise, directly supported by transcript text, and useful in future assistance. "
+    "Set assertion_turn_index to the numbered turn containing the fact and copy source verbatim from that turn. "
+    "If the configured user speaker states the fact, set confirmation_turn_index to the same turn. "
+    "If another speaker states it, emit the fact only when a later numbered turn from the configured user speaker "
+    "clearly agrees with or verifies the same proposition, and set confirmation_turn_index to that later turn. "
+    "Do not treat silence, mere acknowledgement, uncertainty, or unrelated agreement as confirmation."
 )
 
 
@@ -96,8 +110,9 @@ def validate_facts(facts: Any, transcript: NormalizedTranscript) -> list[dict[st
 
     if not isinstance(facts, list):
         return []
-    transcript_text = transcript.searchable_text()
-    user_turns = "\n".join(turn.text for turn in transcript.turns if turn.speaker == transcript.user_speaker)
+    indexed_turns: dict[int, tuple[int, TranscriptTurn] | None] = {}
+    for position, turn in enumerate(transcript.turns):
+        indexed_turns[turn.index] = None if turn.index in indexed_turns else (position, turn)
     accepted: list[dict[str, Any]] = []
     for fact in facts:
         if not isinstance(fact, dict):
@@ -105,20 +120,49 @@ def validate_facts(facts: Any, transcript: NormalizedTranscript) -> list[dict[st
         target = fact.get("target")
         content = fact.get("content")
         source = fact.get("source")
+        assertion_index = fact.get("assertion_turn_index")
+        confirmation_index = fact.get("confirmation_turn_index")
         if target not in {"memory", "user"} or fact.get("confidence") != "high":
             continue
         if not isinstance(content, str) or not isinstance(source, str):
             continue
+        if not _is_turn_index(assertion_index) or not _is_turn_index(confirmation_index):
+            continue
+        assertion_entry = indexed_turns.get(assertion_index)
+        confirmation_entry = indexed_turns.get(confirmation_index)
+        if assertion_entry is None or confirmation_entry is None:
+            continue
+        assertion_position, assertion_turn = assertion_entry
+        confirmation_position, confirmation_turn = confirmation_entry
         content = content.strip()
         source = source.strip()
-        if not content or len(content) > 500 or not source or len(source) > 1000:
+        if not content or len(content) > 500 or len(source) < 8 or len(source) > 1000:
             continue
-        if source not in transcript_text or _looks_imperative(content):
+        if source not in assertion_turn.text or _looks_imperative(content):
             continue
-        if target == "user" and source not in user_turns:
+        if assertion_turn.speaker == transcript.user_speaker:
+            if confirmation_index != assertion_index:
+                continue
+        elif (
+            confirmation_turn.speaker != transcript.user_speaker
+            or confirmation_position <= assertion_position
+        ):
             continue
-        accepted.append({"target": target, "content": content, "confidence": "high", "source": source})
+        accepted.append(
+            {
+                "target": target,
+                "content": content,
+                "confidence": "high",
+                "source": source,
+                "assertion_turn_index": assertion_index,
+                "confirmation_turn_index": confirmation_index,
+            }
+        )
     return accepted
+
+
+def _is_turn_index(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _looks_imperative(content: str) -> bool:

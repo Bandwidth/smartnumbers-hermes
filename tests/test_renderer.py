@@ -14,8 +14,8 @@ def test_render_for_llm_is_speaker_labelled():
     assert "External conversation transcript." in rendered
     assert "Hermes was absent" in rendered
     assert "BEGIN UNTRUSTED TRANSCRIPT" in rendered
-    assert "Damien: I prefer getting" in rendered
-    assert "Alex: That makes sense" in rendered
+    assert "[turn 0] Damien: I prefer getting" in rendered
+    assert "[turn 1] Alex: That makes sense" in rendered
 
 
 def test_render_for_llm_marks_transcript_text_untrusted():

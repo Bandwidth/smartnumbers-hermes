@@ -16,7 +16,7 @@ def render_for_llm(transcript: NormalizedTranscript) -> str:
         f"- {speaker}: {label}"
         for speaker, label in transcript.participants.items()
     ] or ["- speakers are labelled in each turn"]
-    turn_lines = [render_turn(turn) for turn in transcript.turns]
+    turn_lines = [f"[turn {turn.index}] {render_turn(turn)}" for turn in transcript.turns]
     user_speaker = transcript.user_speaker or "unknown"
     return "\n".join(
         [

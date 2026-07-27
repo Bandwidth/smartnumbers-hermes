@@ -21,7 +21,7 @@ class TranscriptWebSocketClient:
         api_key_env: str = "TRANSCRIPT_LISTENER_API_KEY",
         hello_payload: Mapping[str, Any] | None = None,
         connect_factory: Callable[..., Any] | None = None,
-        max_message_bytes: int = 1024 * 1024,
+        max_message_bytes: int | None = None,
     ) -> None:
         self.stream_url = stream_url
         self.api_key_env = api_key_env
@@ -51,7 +51,7 @@ class TranscriptWebSocketClient:
             try:
                 logger.info("transcript websocket connecting url=%s", _redacted_url(self.stream_url))
                 connect_args: dict[str, Any] = {"additional_headers": headers or None}
-                if self._connect_factory is None:
+                if self._connect_factory is None and self.max_message_bytes is not None:
                     connect_args["max_size"] = self.max_message_bytes
                 with connect(self.stream_url, **connect_args) as ws:
                     backoff = 1.0

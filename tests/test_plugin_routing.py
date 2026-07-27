@@ -316,7 +316,7 @@ def test_memory_stage_ack_counts_writes(monkeypatch, tmp_path):
         }
     )
 
-    monkeypatch.setattr(plugin, "extract_facts", lambda ctx, transcript: [{"content": "fact one"}, {"content": "fact two"}])
+    monkeypatch.setattr(plugin, "extract_facts", lambda ctx, transcript, *, batch_max_chars: [{"content": "fact one"}, {"content": "fact two"}])
     monkeypatch.setattr(
         plugin,
         "write_facts_to_memory",
@@ -366,6 +366,55 @@ def test_named_to_command_creates_a_separate_powerful_job(tmp_path):
     assert ack is not None and ack["success"] is True
     assert len(ctx.calls) == 1
     args = ctx.calls[0][1]
-    assert args["name"] == "Execute transcript command call_command"
+    assert args["name"] == "Execute transcript command call_command turn 1"
     assert '"command": "add that event to my calendar."' in args["prompt"]
     assert "delete everything" not in args["prompt"]
+
+
+def test_command_replay_uses_turn_identity_not_command_text(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    config = config_from_mapping(
+        {"import_to_session_db": False, "extract_to_memory": False, "notify_cli": False, "activation_names": ["Ares"]}
+    )
+    ctx = FakeDispatchContext()
+    first = json.dumps(
+        {
+            "conversation_id": "call_replay",
+            "turns": [{"speaker": "TO", "turn_id": "provider-turn-1", "text": "Ares, add that event."}],
+        }
+    )
+    revised = json.dumps(
+        {
+            "conversation_id": "call_replay",
+            "turns": [{"speaker": "TO", "turn_id": "provider-turn-1", "text": "Ares, add that event. I will arrive early."}],
+        }
+    )
+
+    plugin._handle_websocket_message(ctx, archive, config, first)
+    plugin._handle_websocket_message(ctx, archive, config, revised)
+
+    assert len(ctx.calls) == 1
+
+
+def test_multiple_named_commands_in_one_turn_dispatch_separately(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    config = config_from_mapping(
+        {"import_to_session_db": False, "extract_to_memory": False, "notify_cli": False, "activation_names": ["Ares"]}
+    )
+    ctx = FakeDispatchContext()
+    payload = json.dumps(
+        {
+            "conversation_id": "call_multiple",
+            "turns": [
+                {
+                    "speaker": "TO",
+                    "turn_id": "provider-turn-2",
+                    "text": "Ares, add that event. Ares, remind me tomorrow.",
+                }
+            ],
+        }
+    )
+
+    plugin._handle_websocket_message(ctx, archive, config, payload)
+
+    assert len(ctx.calls) == 2

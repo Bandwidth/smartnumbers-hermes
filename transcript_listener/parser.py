@@ -24,9 +24,9 @@ def parse_transcript_payload(
     payload: str | bytes | Mapping[str, Any],
     *,
     metadata: Mapping[str, Any] | None = None,
-    max_turns: int = 500,
-    max_turn_chars: int = 12000,
-    max_transcript_chars: int = 100000,
+    max_turns: int | None = None,
+    max_turn_chars: int | None = None,
+    max_transcript_chars: int | None = None,
 ) -> NormalizedTranscript:
     """Parse transcript JSON or Markdown into the internal model.
 
@@ -41,7 +41,7 @@ def parse_transcript_payload(
     """
 
     metadata = metadata or {}
-    if isinstance(payload, (str, bytes)) and len(payload) > max_transcript_chars:
+    if max_transcript_chars is not None and isinstance(payload, (str, bytes)) and len(payload) > max_transcript_chars:
         raise TranscriptParseError("Transcript payload exceeds configured character limit")
     data = _coerce_mapping(payload)
     if data is None:
@@ -85,8 +85,8 @@ def _parse_markdown(
     payload: str | bytes | Mapping[str, Any],
     *,
     metadata: Mapping[str, Any],
-    max_turns: int,
-    max_turn_chars: int,
+    max_turns: int | None,
+    max_turn_chars: int | None,
 ) -> NormalizedTranscript:
     if isinstance(payload, bytes):
         payload = payload.decode("utf-8")
@@ -96,12 +96,12 @@ def _parse_markdown(
     turns: list[TranscriptTurn] = []
     participants = _parse_participants(metadata.get("participants"))
     for match in MARKDOWN_TURN_RE.finditer(payload):
-        if len(turns) >= max_turns:
+        if max_turns is not None and len(turns) >= max_turns:
             raise TranscriptParseError("Transcript exceeds configured turn limit")
         raw_index, timestamp, speaker, text = match.groups()
         speaker = speaker.strip()
         text = _normalize_markdown_text(text)
-        if len(text) > max_turn_chars:
+        if max_turn_chars is not None and len(text) > max_turn_chars:
             raise TranscriptParseError("Transcript turn exceeds configured character limit")
         if not speaker or not text:
             continue
@@ -171,10 +171,16 @@ def _parse_participants(value: Any) -> dict[str, str]:
     return participants
 
 
-def _parse_turns(value: Any, participants: Mapping[str, str], *, max_turns: int, max_turn_chars: int) -> list[TranscriptTurn]:
+def _parse_turns(
+    value: Any,
+    participants: Mapping[str, str],
+    *,
+    max_turns: int | None,
+    max_turn_chars: int | None,
+) -> list[TranscriptTurn]:
     if not isinstance(value, list):
         raise TranscriptParseError("turns must be an array")
-    if len(value) > max_turns:
+    if max_turns is not None and len(value) > max_turns:
         raise TranscriptParseError("Transcript exceeds configured turn limit")
     turns: list[TranscriptTurn] = []
     for index, item in enumerate(value):
@@ -182,7 +188,7 @@ def _parse_turns(value: Any, participants: Mapping[str, str], *, max_turns: int,
             raise TranscriptParseError(f"turns[{index}] must be an object")
         speaker = _required_str(item, "speaker")
         text = _required_str(item, "text")
-        if len(text) > max_turn_chars:
+        if max_turn_chars is not None and len(text) > max_turn_chars:
             raise TranscriptParseError("Transcript turn exceeds configured character limit")
         timestamp = item.get("timestamp")
         timestamp_text = str(timestamp).strip() if timestamp is not None else None
@@ -193,6 +199,7 @@ def _parse_turns(value: Any, participants: Mapping[str, str], *, max_turns: int,
                 speaker_label=participants.get(speaker, speaker),
                 text=text,
                 timestamp=timestamp_text or None,
+                source_turn_id=_optional_str(item.get("turn_id") or item.get("id")) or None,
             )
         )
     if not turns:

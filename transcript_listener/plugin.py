@@ -119,7 +119,7 @@ def _handle_websocket_message(
     config: TranscriptListenerConfig,
     payload: str,
 ) -> dict[str, Any] | None:
-    if len(payload.encode("utf-8", errors="replace")) > config.max_websocket_message_bytes:
+    if config.max_websocket_message_bytes is not None and len(payload.encode("utf-8", errors="replace")) > config.max_websocket_message_bytes:
         ack = _new_ack(event_id=None)
         _add_ack_error(ack, "parse", "WebSocket message exceeds configured size limit")
         return _finalize_ack(ack)
@@ -230,7 +230,7 @@ def _ingest_payload(
     if config.extract_to_memory:
         ack["stages"]["memory"]["attempted"] = True
         try:
-            facts = extract_facts(ctx, transcript)
+            facts = extract_facts(ctx, transcript, batch_max_chars=config.batch_max_chars)
             write_results = write_facts_to_memory(facts)
             writes_succeeded = sum(1 for r in write_results if r.success)
             ack["stages"]["memory"]["facts_extracted"] = len(facts)
@@ -335,6 +335,7 @@ def _maybe_dispatch_auto_review(
         return {"attempted": False, "success": False, "status": "skipped:disabled", "job_id": None}
 
     commands = detect_named_commands(
+        ctx,
         transcript,
         authoritative_speaker_id=transcript.user_speaker or "",
         names=activation_names(config),
@@ -349,7 +350,7 @@ def _maybe_dispatch_auto_review(
     errors: list[str] = []
     if callbacks:
         callback_key = _execution_key(
-            "callbacks", event_id or transcript.conversation_id, ",".join(f"{item.callback_id}:{item.revision}" for item in callbacks)
+            "callbacks", transcript.conversation_id, ",".join(f"{item.callback_id}:{item.revision}" for item in callbacks)
         )
         if archive.claim_execution(
             execution_key=callback_key,
@@ -377,16 +378,21 @@ def _maybe_dispatch_auto_review(
         else:
             dispatched.append(None)
     if commands:
-        command_key = _execution_key(
-            "commands", event_id or transcript.conversation_id, ",".join(f"{item.turn_index}:{item.command}" for item in commands)
-        )
-        if archive.claim_execution(
-            execution_key=command_key,
-            conversation_id=transcript.conversation_id,
-            execution_kind="commands",
-            callback_id=None,
-            authorization_quote="\n".join(item.quote for item in commands),
-        ):
+        for command in commands:
+            command_key = _execution_key(
+                "command",
+                transcript.conversation_id,
+                f"{command.turn_identity}:{command.activation_ordinal}",
+            )
+            if not archive.claim_execution(
+                execution_key=command_key,
+                conversation_id=transcript.conversation_id,
+                execution_kind="command",
+                callback_id=None,
+                authorization_quote=command.quote,
+            ):
+                dispatched.append(None)
+                continue
             try:
                 mutation_token = archive.create_callback_mutation_token()
                 job_id = _dispatch_post_call_job(
@@ -395,10 +401,10 @@ def _maybe_dispatch_auto_review(
                     requested_at=requested_at,
                     transcript=transcript,
                     event_received_at=event_received_at,
-                    name=f"Execute transcript command {transcript.conversation_id}",
+                    name=f"Execute transcript command {transcript.conversation_id} turn {command.turn_identity}",
                     prompt=_build_command_prompt(
                         transcript,
-                        commands,
+                        [command],
                         event_received_at=event_received_at,
                         callback_mutation_token=mutation_token,
                     ),
@@ -409,8 +415,6 @@ def _maybe_dispatch_auto_review(
                 error = str(exc)
                 archive.complete_execution(command_key, error=error)
                 errors.append(error)
-        else:
-            dispatched.append(None)
     job_id = next((item for item in dispatched if item), None)
     if errors:
         error = "; ".join(errors)
@@ -499,7 +503,18 @@ def _build_command_prompt(
             json.dumps({"conversation_id": transcript.conversation_id, "received_at": event_received_at, "source": transcript.source}),
             "",
             "TRUSTED AUTHORITATIVE COMMANDS:",
-            json.dumps([{"turn_index": command.turn_index, "command": command.command, "quote": command.quote} for command in commands], ensure_ascii=False),
+            json.dumps(
+                [
+                    {
+                        "turn_index": command.turn_index,
+                        "activation_ordinal": command.activation_ordinal,
+                        "command": command.command,
+                        "quote": command.quote,
+                    }
+                    for command in commands
+                ],
+                ensure_ascii=False,
+            ),
             "",
             f"Use transcript_search with external_session_id={transcript.conversation_id!r} only when further call context is needed.",
             "If and only if an authoritative command asks to modify transcript callbacks, use this one-time authorization token:",

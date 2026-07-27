@@ -23,14 +23,14 @@ def download_transcript_url(
     url: str,
     *,
     timeout_seconds: int = 15,
-    max_bytes: int = 5 * 1024 * 1024,
+    max_bytes: int | None = None,
     allow_insecure: bool = False,
     allowed_hosts: tuple[str, ...] = (),
 ) -> str:
     """Fetch a presigned transcript URL and return UTF-8 JSON text."""
 
     normalized_url = _validate_url(url, allow_insecure=allow_insecure, allowed_hosts=allowed_hosts)
-    byte_limit = max(1, int(max_bytes or 0))
+    byte_limit = max(1, int(max_bytes)) if max_bytes is not None else None
     timeout = max(1, int(timeout_seconds or 0))
     request = Request(
         normalized_url,
@@ -48,7 +48,7 @@ def download_transcript_url(
 
             content_length = response.headers.get("Content-Length") if response.headers else None
             try:
-                if content_length and int(content_length) > byte_limit:
+                if byte_limit is not None and content_length and int(content_length) > byte_limit:
                     raise TranscriptDownloadError("Transcript URL response exceeds configured size limit")
             except ValueError:
                 pass
@@ -106,16 +106,16 @@ def _reject_private_destination(hostname: str) -> None:
             raise TranscriptDownloadError("Transcript URL must not resolve to a private or reserved address")
 
 
-def _read_limited(response, byte_limit: int) -> bytes:
+def _read_limited(response, byte_limit: int | None) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
-        remaining = byte_limit + 1 - total
+        remaining = byte_limit + 1 - total if byte_limit is not None else 65536
         chunk = response.read(min(65536, remaining))
         if not chunk:
             break
         chunks.append(chunk)
         total += len(chunk)
-        if total > byte_limit:
+        if byte_limit is not None and total > byte_limit:
             raise TranscriptDownloadError("Transcript URL response exceeds configured size limit")
     return b"".join(chunks)

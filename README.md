@@ -70,8 +70,9 @@ hermes smartnumbers clear
 
 ## Configuration
 
-Browser setup writes the required connection values. Additional behavior can
-be configured in `$HERMES_HOME/config.yaml`:
+Browser setup writes every required connection value. No new environment
+variables or configuration entries are required for normal production use.
+The following optional settings are the common behavior overrides:
 
 ```yaml
 plugins:
@@ -80,40 +81,18 @@ plugins:
   entries:
     smartnumbers:
       run_listener: true
-      stream_url: "wss://connections.smartnumbers.labs.bandwidth.com/ws/hermes"
-      app_url: "https://smartnumbers.labs.bandwidth.com"
-      user_speaker: "TO"
-      archive_raw: true
-      import_to_session_db: true
-      extract_to_memory: true
-      register_transcript_search_tool: true
-      notify_cli: true
       auto_review_transcripts: true
       auto_review_deliver: "local"
       # Omit auto_review_toolsets to preserve Hermes' full cron toolset.
       # Set it when a post-call job should be restricted.
-      auto_review_toolsets: null
-      default_call_direction: inbound
-      user_speaker_by_direction:
-        inbound: TO
-        outbound: FROM
-      # Provider event direction is ignored by default. Enable only when the
-      # authenticated provider supplies direction metadata you trust.
-      trust_event_direction: false
-      # Optional STT aliases. The active Hermes branding name and its first
-      # word are accepted automatically.
-      activation_names: []
-      max_websocket_message_bytes: 1048576
-      max_turns: 500
-      max_turn_chars: 12000
-      max_transcript_chars: 100000
-      allowed_stream_hosts:
-        - connections.smartnumbers.labs.bandwidth.com
-      allowed_transcript_hosts: []
-      download_timeout_seconds: 15
-      max_download_bytes: 5242880
-      allow_insecure_transcript_urls: false
 ```
+
+Advanced overrides are optional: `activation_names` adds STT aliases;
+`user_speaker_by_direction` changes the default inbound `TO` and outbound
+`FROM` authority mapping; `trust_event_direction` accepts authenticated provider
+direction metadata; `auto_review_toolsets` restricts post-call tool access; and
+`allowed_transcript_hosts` pins production transcript storage hosts. Setup saves
+the approved stream host automatically.
 
 When `archive_raw` is enabled, transcripts are stored at
 `$HERMES_HOME/transcript_listener/transcripts.db`. The plugin exposes:
@@ -155,18 +134,23 @@ callback when the archive is opened.
 
 ### Named Call Commands
 
-The configured user speaker can issue a one-time arbitrary Hermes command by
-starting a turn with Hermes' active branding name or its first word. If the
-branding name is `Ares Agent`, both forms are accepted:
+The configured user speaker can issue a one-time arbitrary Hermes command at
+any point in a turn by directly addressing Hermes with its active branding name
+or its first word. If the branding name is `Ares Agent`, both forms are
+accepted:
 
 ```text
 TO: Ares, add that event to my calendar.
 TO: Hey Ares Agent, research that company and send me a summary.
+TO: Friday sounds good. Ares, add that to my calendar. What time should I arrive?
 ```
 
 Commands from the other party and incidental mentions of the name do not
 authorize work. The local direction mapping determines the authoritative
 speaker; a payload cannot select it. Current inbound calls use `TO` by default.
+Hermes extracts the verbatim command span without requiring it to consume the
+rest of the speaker turn. Multiple direct addresses in one turn are independent
+commands.
 
 Named command jobs and generic callback jobs keep `auto_review_toolsets` as-is.
 When it is omitted, Hermes' cron default toolsets are preserved. Hermes' normal
@@ -189,6 +173,11 @@ carefully as any other autonomous Hermes automation.
 `transcript_search` returns `source_trust: "external-untrusted"` and supports
 pagination through `offset` and `next_offset` so long calls can be retrieved
 without silently truncating the result set.
+
+Transcript size is not capped by default. Complete transcripts are archived,
+and durable-fact extraction processes every turn in bounded LLM batches using
+the existing `batch_max_chars` setting. Optional size limits exist only as
+explicit deployment overrides.
 
 ## Network And Storage Safety
 

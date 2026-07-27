@@ -15,6 +15,7 @@ class TranscriptTurn:
     speaker_label: str
     text: str
     timestamp: str | None = None
+    source_turn_id: str | None = None
 
 
 @dataclass(frozen=True)

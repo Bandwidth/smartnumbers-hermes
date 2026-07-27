@@ -6,6 +6,7 @@ import pytest
 from transcript_listener import downloader
 from transcript_listener.config import config_from_mapping
 from transcript_listener.downloader import TranscriptDownloadError
+from transcript_listener.extractor import extract_facts
 from transcript_listener.parser import TranscriptParseError, parse_transcript_payload
 from transcript_listener.review_config_tool import make_transcript_review_config_handler
 from transcript_listener.storage import TranscriptArchive
@@ -41,6 +42,31 @@ def test_parser_enforces_turn_and_character_limits():
         parse_transcript_payload({"conversation_id": "x", "turns": [{"speaker": "TO", "text": "a"}, {"speaker": "TO", "text": "b"}]}, max_turns=1)
     with pytest.raises(TranscriptParseError, match="character limit"):
         parse_transcript_payload({"conversation_id": "x", "turns": [{"speaker": "TO", "text": "abcdef"}]}, max_turn_chars=5)
+
+
+def test_parser_accepts_large_transcripts_without_an_application_default_cap():
+    transcript = parse_transcript_payload(
+        {"conversation_id": "large", "turns": [{"speaker": "TO", "text": "x" * 200_000}]}
+    )
+
+    assert len(transcript.turns[0].text) == 200_000
+
+
+def test_fact_extraction_processes_every_long_turn_in_chunks():
+    transcript = parse_transcript_payload(
+        {"conversation_id": "large", "turns": [{"speaker": "TO", "text": "x" * 100}]},
+        metadata={"user_speaker": "TO"},
+    )
+    calls = []
+
+    class LLM:
+        def complete_structured(self, **kwargs):  # noqa: ANN003
+            calls.append(kwargs["input"][0]["text"])
+            return type("Result", (), {"parsed": {"facts": []}})()
+
+    extract_facts(type("Context", (), {"llm": LLM()})(), transcript, batch_max_chars=30)
+
+    assert len(calls) > 1
 
 
 def test_callback_registry_migrates_legacy_instruction_and_paginates_search(tmp_path):

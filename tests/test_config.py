@@ -50,3 +50,6 @@ def test_config_auto_review_defaults_to_enabled_but_no_toolset_override():
     assert config.auto_review_transcripts is True
     assert config.auto_review_deliver == "local"
     assert config.auto_review_toolsets is None
+    assert config.max_download_bytes is None
+    assert config.max_websocket_message_bytes is None
+    assert config.max_turns is None

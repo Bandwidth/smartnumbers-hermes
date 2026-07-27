@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import secrets
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -16,6 +18,7 @@ from .renderer import render_for_sessiondb
 
 
 REVIEW_INSTRUCTIONS_SETTING = "review_instructions"
+LEGACY_CALLBACK_ID = "default-review"
 
 
 @dataclass(frozen=True)
@@ -42,18 +45,44 @@ class TranscriptSearchResult:
         }
 
 
+@dataclass(frozen=True)
+class TranscriptCallback:
+    callback_id: str
+    name: str
+    instructions: str
+    enabled: bool
+    revision: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.callback_id,
+            "name": self.name,
+            "instructions": self.instructions,
+            "enabled": self.enabled,
+            "revision": self.revision,
+        }
+
+
 class TranscriptArchive:
     """Profile-local transcript archive and direct search index."""
 
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path is not None else default_storage_path()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _restrict_permissions(self.path.parent, 0o700)
         self._init_schema()
+        self._secure_database_files()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.path))
         conn.row_factory = sqlite3.Row
+        self._secure_database_files()
         return conn
+
+    def _secure_database_files(self) -> None:
+        for candidate in (self.path, self.path.with_name(f"{self.path.name}-wal"), self.path.with_name(f"{self.path.name}-shm"), self.path.with_name(f"{self.path.name}-journal")):
+            if candidate.exists():
+                _restrict_permissions(candidate, 0o600)
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
@@ -100,6 +129,36 @@ class TranscriptArchive:
                     value TEXT NOT NULL,
                     updated_at REAL NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS transcript_callbacks (
+                    callback_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    instructions TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS callback_executions (
+                    execution_key TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    execution_kind TEXT NOT NULL,
+                    callback_id TEXT,
+                    status TEXT NOT NULL,
+                    authorization_quote TEXT NOT NULL,
+                    job_id TEXT,
+                    error TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS callback_mutation_tokens (
+                    token TEXT PRIMARY KEY,
+                    remaining_uses INTEGER NOT NULL,
+                    expires_at REAL NOT NULL,
+                    created_at REAL NOT NULL
+                );
                 """
             )
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(transcripts)")}
@@ -113,6 +172,23 @@ class TranscriptArchive:
                 if column not in columns:
                     conn.execute(f"ALTER TABLE transcripts ADD COLUMN {column} TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_event_received_at ON transcripts(event_received_at)")
+            self._migrate_legacy_review_instruction(conn)
+
+    def _migrate_legacy_review_instruction(self, conn: sqlite3.Connection) -> None:
+        """Preserve existing one-string configuration as the default callback."""
+
+        existing = conn.execute("SELECT 1 FROM transcript_callbacks LIMIT 1").fetchone()
+        legacy = conn.execute("SELECT value FROM settings WHERE key = ?", (REVIEW_INSTRUCTIONS_SETTING,)).fetchone()
+        if existing or legacy is None or not str(legacy["value"]).strip():
+            return
+        now = time.time()
+        conn.execute(
+            """
+            INSERT INTO transcript_callbacks (callback_id, name, instructions, enabled, revision, created_at, updated_at)
+            VALUES (?, ?, ?, 1, 1, ?, ?)
+            """,
+            (LEGACY_CALLBACK_ID, "Default transcript review", str(legacy["value"]).strip(), now, now),
+        )
 
     def save_transcript(
         self,
@@ -219,14 +295,140 @@ class TranscriptArchive:
             conn.execute("DELETE FROM settings WHERE key = ?", (key,))
 
     def get_review_instructions(self) -> str:
-        return self.get_setting(REVIEW_INSTRUCTIONS_SETTING).strip()
+        callback = self.get_callback(LEGACY_CALLBACK_ID)
+        return callback.instructions if callback and callback.enabled else self.get_setting(REVIEW_INSTRUCTIONS_SETTING).strip()
 
     def set_review_instructions(self, instructions: str) -> None:
         instructions = instructions.strip()
         if instructions:
             self.set_setting(REVIEW_INSTRUCTIONS_SETTING, instructions)
+            self.upsert_callback(
+                callback_id=LEGACY_CALLBACK_ID,
+                name="Default transcript review",
+                instructions=instructions,
+                enabled=True,
+            )
         else:
             self.delete_setting(REVIEW_INSTRUCTIONS_SETTING)
+            self.remove_callback(LEGACY_CALLBACK_ID)
+
+    def list_callbacks(self, *, enabled_only: bool = False) -> list[TranscriptCallback]:
+        where = "WHERE enabled = 1" if enabled_only else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT callback_id, name, instructions, enabled, revision FROM transcript_callbacks {where} ORDER BY created_at, callback_id"
+            ).fetchall()
+        return [_callback_from_row(row) for row in rows]
+
+    def get_callback(self, callback_id: str) -> TranscriptCallback | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT callback_id, name, instructions, enabled, revision FROM transcript_callbacks WHERE callback_id = ?",
+                (callback_id,),
+            ).fetchone()
+        return _callback_from_row(row) if row else None
+
+    def upsert_callback(
+        self,
+        *,
+        callback_id: str,
+        name: str,
+        instructions: str,
+        enabled: bool = True,
+    ) -> TranscriptCallback:
+        callback_id = _callback_id(callback_id)
+        name = _bounded_text(name, 160, "callback name")
+        instructions = _bounded_text(instructions, 12000, "callback instructions")
+        now = time.time()
+        with self._connect() as conn:
+            existing = conn.execute("SELECT revision, created_at FROM transcript_callbacks WHERE callback_id = ?", (callback_id,)).fetchone()
+            revision = int(existing["revision"]) + 1 if existing else 1
+            created_at = float(existing["created_at"]) if existing else now
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO transcript_callbacks (
+                    callback_id, name, instructions, enabled, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (callback_id, name, instructions, int(enabled), revision, created_at, now),
+            )
+        return TranscriptCallback(callback_id, name, instructions, enabled, revision)
+
+    def set_callback_enabled(self, callback_id: str, enabled: bool) -> TranscriptCallback | None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE transcript_callbacks SET enabled = ?, revision = revision + 1, updated_at = ? WHERE callback_id = ?",
+                (int(enabled), time.time(), callback_id),
+            )
+        return self.get_callback(callback_id)
+
+    def remove_callback(self, callback_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM transcript_callbacks WHERE callback_id = ?", (callback_id,))
+        return cursor.rowcount > 0
+
+    def claim_execution(
+        self,
+        *,
+        execution_key: str,
+        conversation_id: str,
+        execution_kind: str,
+        callback_id: str | None,
+        authorization_quote: str,
+    ) -> bool:
+        """Atomically reserve an action before creating a durable cron job."""
+
+        now = time.time()
+        try:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO callback_executions (
+                        execution_key, conversation_id, execution_kind, callback_id, status,
+                        authorization_quote, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'claimed', ?, ?, ?)
+                    ON CONFLICT(execution_key) DO UPDATE SET
+                        status = 'claimed', error = NULL, updated_at = excluded.updated_at
+                    WHERE callback_executions.status = 'error'
+                       OR (callback_executions.status = 'claimed' AND callback_executions.updated_at < ?)
+                    """,
+                    (execution_key, conversation_id, execution_kind, callback_id, authorization_quote, now, now, now - 300),
+                )
+            return cursor.rowcount == 1
+        except sqlite3.IntegrityError:
+            return False
+
+    def complete_execution(self, execution_key: str, *, job_id: str | None = None, error: str | None = None) -> None:
+        status = "dispatched" if not error else "error"
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE callback_executions SET status = ?, job_id = ?, error = ?, updated_at = ? WHERE execution_key = ?",
+                (status, job_id, error, time.time(), execution_key),
+            )
+
+    def create_callback_mutation_token(self, *, uses: int = 10, ttl_seconds: int = 900) -> str:
+        token = secrets.token_urlsafe(32)
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM callback_mutation_tokens WHERE expires_at < ?", (now,))
+            conn.execute(
+                "INSERT INTO callback_mutation_tokens (token, remaining_uses, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                (token, max(1, uses), now + max(1, ttl_seconds), now),
+            )
+        return token
+
+    def consume_callback_mutation_token(self, token: str) -> bool:
+        now = time.time()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE callback_mutation_tokens
+                SET remaining_uses = remaining_uses - 1
+                WHERE token = ? AND expires_at >= ? AND remaining_uses > 0
+                """,
+                (token, now),
+            )
+        return cursor.rowcount == 1
 
     def get_review_state(self, conversation_id: str) -> dict[str, str | None]:
         with self._connect() as conn:
@@ -281,6 +483,7 @@ class TranscriptArchive:
         since: str = "",
         until: str = "",
         limit: int = 10,
+        offset: int = 0,
     ) -> list[TranscriptSearchResult]:
         limit = max(1, min(int(limit or 10), 50))
         where: list[str] = []
@@ -310,8 +513,9 @@ class TranscriptArchive:
             {where_sql}
             ORDER BY COALESCE(tr.event_received_at, '') DESC, t.conversation_id, t.turn_index
             LIMIT ?
+            OFFSET ?
         """
-        params.append(limit)
+        params.extend([limit, max(0, int(offset or 0))])
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [
@@ -328,6 +532,73 @@ class TranscriptArchive:
             for row in rows
         ]
 
+    def search_page(self, **kwargs: Any) -> tuple[list[TranscriptSearchResult], int]:
+        """Return a page and total matching turns for cursor-based retrieval."""
+
+        results = self.search(**kwargs)
+        query = str(kwargs.get("query") or "")
+        external_session_id = str(kwargs.get("external_session_id") or "")
+        speaker = str(kwargs.get("speaker") or "")
+        since = str(kwargs.get("since") or "")
+        until = str(kwargs.get("until") or "")
+        where: list[str] = []
+        params: list[Any] = []
+        if query.strip():
+            where.append("(LOWER(t.text) LIKE LOWER(?) OR LOWER(t.speaker_label) LIKE LOWER(?))")
+            needle = f"%{query.strip()}%"
+            params.extend([needle, needle])
+        if external_session_id.strip():
+            where.append("t.conversation_id = ?")
+            params.append(external_session_id.strip())
+        if speaker.strip():
+            where.append("(t.speaker = ? OR t.speaker_label = ?)")
+            params.extend([speaker.strip(), speaker.strip()])
+        if since.strip():
+            where.append("tr.event_received_at IS NOT NULL AND tr.event_received_at >= ?")
+            params.append(since.strip())
+        if until.strip():
+            where.append("tr.event_received_at IS NOT NULL AND tr.event_received_at <= ?")
+            params.append(until.strip())
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        with self._connect() as conn:
+            total = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM turns t JOIN transcripts tr ON tr.conversation_id = t.conversation_id {where_sql}", params
+                ).fetchone()[0]
+            )
+        return results, total
+
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _callback_from_row(row: sqlite3.Row) -> TranscriptCallback:
+    return TranscriptCallback(
+        callback_id=str(row["callback_id"]),
+        name=str(row["name"]),
+        instructions=str(row["instructions"]),
+        enabled=bool(row["enabled"]),
+        revision=int(row["revision"]),
+    )
+
+
+def _callback_id(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in "_-" else "-" for char in value.strip().lower()).strip("-")
+    if not cleaned or len(cleaned) > 96:
+        raise ValueError("callback id must contain 1-96 letters, numbers, underscores, or hyphens")
+    return cleaned
+
+
+def _bounded_text(value: str, maximum: int, label: str) -> str:
+    cleaned = value.strip()
+    if not cleaned or len(cleaned) > maximum:
+        raise ValueError(f"{label} must contain 1-{maximum} characters")
+    return cleaned
+
+
+def _restrict_permissions(path: Path, mode: int) -> None:
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass

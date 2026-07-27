@@ -8,15 +8,9 @@ import os
 import threading
 from collections.abc import Callable, Mapping
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-if not any(getattr(handler, "_transcript_listener_handler", False) for handler in logger.handlers):
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
-    handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
-    handler._transcript_listener_handler = True  # type: ignore[attr-defined]
-    logger.addHandler(handler)
 
 
 class TranscriptWebSocketClient:
@@ -27,11 +21,13 @@ class TranscriptWebSocketClient:
         api_key_env: str = "TRANSCRIPT_LISTENER_API_KEY",
         hello_payload: Mapping[str, Any] | None = None,
         connect_factory: Callable[..., Any] | None = None,
+        max_message_bytes: int = 1024 * 1024,
     ) -> None:
         self.stream_url = stream_url
         self.api_key_env = api_key_env
         self.hello_payload = dict(hello_payload) if hello_payload is not None else None
         self._connect_factory = connect_factory
+        self.max_message_bytes = max_message_bytes
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -53,10 +49,13 @@ class TranscriptWebSocketClient:
             if api_key:
                 headers.append(("Authorization", f"Bearer {api_key}"))
             try:
-                logger.info("transcript websocket connecting url=%s", self.stream_url)
-                with connect(self.stream_url, additional_headers=headers or None) as ws:
+                logger.info("transcript websocket connecting url=%s", _redacted_url(self.stream_url))
+                connect_args: dict[str, Any] = {"additional_headers": headers or None}
+                if self._connect_factory is None:
+                    connect_args["max_size"] = self.max_message_bytes
+                with connect(self.stream_url, **connect_args) as ws:
                     backoff = 1.0
-                    logger.info("transcript websocket connected url=%s", self.stream_url)
+                    logger.info("transcript websocket connected url=%s", _redacted_url(self.stream_url))
                     if self.hello_payload is not None:
                         ws.send(json.dumps(self.hello_payload, ensure_ascii=False))
                         logger.info("transcript websocket sent hello")
@@ -68,17 +67,16 @@ class TranscriptWebSocketClient:
                         ack = on_payload(str(message))
                         if ack:
                             ws.send(json.dumps(dict(ack), ensure_ascii=False))
-                            logger.debug("transcript ack sent event_id=%s success=%s payload=%s", ack.get("event_id"), ack.get("success"), ack)
+                            logger.debug("transcript ack sent event_id=%s success=%s", ack.get("event_id"), ack.get("success"))
                     if not self._stop.is_set():
-                        logger.warning("transcript websocket closed url=%s retry_in=%.1fs", self.stream_url, backoff)
+                        logger.warning("transcript websocket closed url=%s retry_in=%.1fs", _redacted_url(self.stream_url), backoff)
             except Exception as exc:
                 if self._stop.is_set():
                     break
                 logger.warning(
-                    "transcript websocket disconnected url=%s error=%s: %s retry_in=%.1fs",
-                    self.stream_url,
+                    "transcript websocket disconnected url=%s error_type=%s retry_in=%.1fs",
+                    _redacted_url(self.stream_url),
                     type(exc).__name__,
-                    exc,
                     backoff,
                 )
             if self._stop.is_set():
@@ -96,3 +94,28 @@ def start_daemon_listener(client: TranscriptWebSocketClient, on_payload: Callabl
     )
     thread.start()
     return thread
+
+
+def validate_stream_url(
+    stream_url: str,
+    *,
+    allowed_hosts: tuple[str, ...],
+    allow_insecure: bool,
+) -> None:
+    parsed = urlparse(stream_url)
+    hostname = parsed.hostname
+    if not hostname or parsed.username or parsed.password:
+        raise ValueError("stream URL must include a hostname without user credentials")
+    if hostname.casefold() not in {host.casefold() for host in allowed_hosts}:
+        raise ValueError("stream URL host is not approved")
+    if parsed.scheme == "wss":
+        return
+    if parsed.scheme == "ws" and allow_insecure and hostname in {"localhost", "127.0.0.1", "::1", "connection-server"}:
+        return
+    raise ValueError("stream URL must use wss unless explicitly configured for local development")
+
+
+def _redacted_url(url: str) -> str:
+    parsed = urlparse(url)
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    return f"{parsed.scheme}://{netloc}{parsed.path}"

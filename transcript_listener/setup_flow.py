@@ -305,6 +305,9 @@ def persist_setup_result(
             "last_setup_at": _utc_now_iso(),
         }
     )
+    stream_host = urlparse(token.websocket_url).hostname
+    if stream_host:
+        entry["allowed_stream_hosts"] = [stream_host]
     if app_url:
         entry["app_url"] = normalize_app_url(app_url)
     save_config(cfg)
@@ -320,7 +323,7 @@ def clear_setup(*, plugin_key: str = PLUGIN_KEY, api_key_env: str = API_KEY_ENV)
     cfg = load_config()
     entry = cfg.get("plugins", {}).get("entries", {}).get(plugin_key)
     if isinstance(entry, dict):
-        for key in ("stream_url", "key_prefix", "last_setup_at"):
+        for key in ("stream_url", "key_prefix", "last_setup_at", "allowed_stream_hosts"):
             entry.pop(key, None)
         entry["run_listener"] = False
         save_config(cfg)
@@ -358,6 +361,7 @@ class CallbackServer:
         port: int = 0,
     ) -> None:
         _validate_callback_endpoint(redirect_host, port)
+        _validate_callback_endpoint(bind_host, port)
         self._redirect_host = redirect_host
         self._server = _CallbackHTTPServer((bind_host, port), _CallbackHandler)
         self._thread = threading.Thread(target=self._server.serve_forever, name="transcript-listener-setup-callback", daemon=True)

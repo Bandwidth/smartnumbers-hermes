@@ -90,6 +90,26 @@ plugins:
       notify_cli: true
       auto_review_transcripts: true
       auto_review_deliver: "local"
+      # Omit auto_review_toolsets to preserve Hermes' full cron toolset.
+      # Set it when a post-call job should be restricted.
+      auto_review_toolsets: null
+      default_call_direction: inbound
+      user_speaker_by_direction:
+        inbound: TO
+        outbound: FROM
+      # Provider event direction is ignored by default. Enable only when the
+      # authenticated provider supplies direction metadata you trust.
+      trust_event_direction: false
+      # Optional STT aliases. The active Hermes branding name and its first
+      # word are accepted automatically.
+      activation_names: []
+      max_websocket_message_bytes: 1048576
+      max_turns: 500
+      max_turn_chars: 12000
+      max_transcript_chars: 100000
+      allowed_stream_hosts:
+        - connections.smartnumbers.labs.bandwidth.com
+      allowed_transcript_hosts: []
       download_timeout_seconds: 15
       max_download_bytes: 5242880
       allow_insecure_transcript_urls: false
@@ -104,6 +124,86 @@ When `archive_raw` is enabled, transcripts are stored at
 
 When review instructions are present and `auto_review_transcripts` is enabled,
 the plugin schedules a one-shot Hermes cron task for each new transcript.
+
+## Post-Call Automation
+
+Post-call behavior is generic. There are no callback types for calendars,
+email, tasks, or other services. A callback is user-authorized natural-language
+instructions that Hermes evaluates after a new call, with the same configured
+cron tool access as the existing automatic review job.
+
+`transcript_review_config` retains its existing actions:
+
+- `show`, `set`, and `clear` manage the backward-compatible default callback.
+
+It also supports independent callbacks:
+
+- `list`
+- `register` with `id`, `name`, and `instructions`
+- `update` with `id`, `name`, and `instructions`
+- `enable`, `disable`, and `remove` with `id`
+
+For example, Hermes can register an arbitrary callback after a normal user
+request:
+
+```text
+Whenever I agree to attend an event on a call, add it to my calendar.
+```
+
+Existing saved review instructions are migrated to the `default-review`
+callback when the archive is opened.
+
+### Named Call Commands
+
+The configured user speaker can issue a one-time arbitrary Hermes command by
+starting a turn with Hermes' active branding name or its first word. If the
+branding name is `Ares Agent`, both forms are accepted:
+
+```text
+TO: Ares, add that event to my calendar.
+TO: Hey Ares Agent, research that company and send me a summary.
+```
+
+Commands from the other party and incidental mentions of the name do not
+authorize work. The local direction mapping determines the authoritative
+speaker; a payload cannot select it. Current inbound calls use `TO` by default.
+
+Named command jobs and generic callback jobs keep `auto_review_toolsets` as-is.
+When it is omitted, Hermes' cron default toolsets are preserved. Hermes' normal
+approval configuration, including `approvals.mode` and `approvals.cron_mode`,
+continues to control tool approvals.
+
+Callback changes from a scheduled job require a short-lived authorization token
+issued only to a named-command job. This prevents a normal callback or call
+participant from silently modifying future callback behavior.
+
+### Trust Boundary
+
+Transcript turns are external call data. They can provide dates, contacts,
+locations, and context, but they do not independently authorize Hermes actions.
+Only a named command from the configured user speaker or an already registered
+callback creates an action goal. When a user intentionally grants a generic
+callback broad Hermes tool access, its instructions should be reviewed as
+carefully as any other autonomous Hermes automation.
+
+`transcript_search` returns `source_trust: "external-untrusted"` and supports
+pagination through `offset` and `next_offset` so long calls can be retrieved
+without silently truncating the result set.
+
+## Network And Storage Safety
+
+The listener requires an approved `wss://` stream host before sending its API
+key. Setup records the provider-approved stream host. Custom plaintext streams
+are supported only for explicit local development configuration.
+
+Transcript URL downloads reject redirects and private, loopback, link-local,
+multicast, reserved, and metadata-network addresses. Set
+`allowed_transcript_hosts` when production transcript storage has a stable host
+list.
+
+The archive directory, database, SQLite sidecars, and listener lock are created
+with private owner-only permissions. Archive execution records prevent replayed
+events from scheduling duplicate callback or named-command jobs.
 
 ## WebSocket Flow
 

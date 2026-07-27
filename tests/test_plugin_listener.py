@@ -25,9 +25,11 @@ def test_register_starts_listener_once_per_process(monkeypatch, tmp_path):
     started = []
     config = config_from_mapping(
         {
-            "run_listener": True,
-            "stream_url": "ws://connection-server:8000/ws/hermes",
-            "storage_path": str(tmp_path / "transcripts.db"),
+                "run_listener": True,
+                "stream_url": "ws://connection-server:8000/ws/hermes",
+                "storage_path": str(tmp_path / "transcripts.db"),
+                "allow_insecure_stream_url": True,
+                "allowed_stream_hosts": ["connection-server"],
         }
     )
 

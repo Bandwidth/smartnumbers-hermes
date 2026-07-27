@@ -22,10 +22,12 @@ FACT_EXTRACTION_SCHEMA = {
                     "source": {"type": "string"},
                 },
                 "required": ["target", "content", "confidence", "source"],
+                "additionalProperties": False,
             },
         }
     },
     "required": ["facts"],
+    "additionalProperties": False,
 }
 
 
@@ -50,4 +52,38 @@ def extract_facts(ctx: Any, transcript: NormalizedTranscript) -> list[dict[str, 
     )
     parsed = result.parsed if isinstance(result.parsed, dict) else {}
     facts = parsed.get("facts") if isinstance(parsed, dict) else []
-    return [fact for fact in facts if isinstance(fact, dict)]
+    return validate_facts(facts, transcript)
+
+
+def validate_facts(facts: Any, transcript: NormalizedTranscript) -> list[dict[str, Any]]:
+    """Allow only bounded, high-confidence, evidence-backed descriptive facts."""
+
+    if not isinstance(facts, list):
+        return []
+    transcript_text = transcript.searchable_text()
+    user_turns = "\n".join(turn.text for turn in transcript.turns if turn.speaker == transcript.user_speaker)
+    accepted: list[dict[str, Any]] = []
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        target = fact.get("target")
+        content = fact.get("content")
+        source = fact.get("source")
+        if target not in {"memory", "user"} or fact.get("confidence") != "high":
+            continue
+        if not isinstance(content, str) or not isinstance(source, str):
+            continue
+        content = content.strip()
+        source = source.strip()
+        if not content or len(content) > 500 or not source or len(source) > 1000:
+            continue
+        if source not in transcript_text or _looks_imperative(content):
+            continue
+        if target == "user" and source not in user_turns:
+            continue
+        accepted.append({"target": target, "content": content, "confidence": "high", "source": source})
+    return accepted
+
+
+def _looks_imperative(content: str) -> bool:
+    return content.lower().startswith(("ignore ", "always ", "never ", "must ", "do not ", "send ", "run ", "delete "))

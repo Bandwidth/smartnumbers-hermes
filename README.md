@@ -179,8 +179,8 @@ pagination through `offset` and `next_offset` so long calls can be retrieved
 without silently truncating the result set.
 
 Downloaded transcript size is not capped by default. Complete transcripts are
-archived, and durable-fact extraction processes every turn in bounded LLM
-batches using the existing `batch_max_chars` setting. WebSocket event envelopes
+archived, and durable-fact extraction evaluates the complete finished transcript
+in one structured LLM request. WebSocket event envelopes
 are capped at 1 MiB by default through `max_websocket_message_bytes`; deployments
 can raise that limit explicitly without limiting the referenced S3 transcript.
 

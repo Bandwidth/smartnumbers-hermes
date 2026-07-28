@@ -19,6 +19,11 @@ MARKDOWN_TRANSCRIPT = """1
 **FROM**: Hello, I'd like to schedule an appointment.
 """
 
+OUTBOUND_COMMAND_MARKDOWN = """1
+[00:00:02,200 --> 00:00:13,079]
+**FROM**: Ares, add that event to my calendar.
+"""
+
 
 class FakeDispatchContext:
     def __init__(self):
@@ -118,6 +123,26 @@ def test_transcript_url_event_applies_markdown_metadata(monkeypatch, tmp_path):
     assert ack is not None
     assert ack["success"] is True
     assert ack["conversation_id"] == "call_456"
+
+
+def test_raw_markdown_uses_configured_outbound_authority(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    config = config_from_mapping(
+        {
+            "import_to_session_db": False,
+            "extract_to_memory": False,
+            "notify_cli": False,
+            "default_call_direction": "outbound",
+            "activation_names": ["Ares"],
+        }
+    )
+    ctx = FakeDispatchContext()
+
+    ack = plugin._handle_websocket_message(ctx, archive, config, OUTBOUND_COMMAND_MARKDOWN)
+
+    assert ack is not None and ack["success"] is True
+    assert len(ctx.calls) == 1
+    assert "add that event to my calendar" in ctx.calls[0][1]["prompt"]
 
 
 def test_transcript_url_event_returns_ack_for_download_failure(monkeypatch, tmp_path):
@@ -326,7 +351,7 @@ def test_memory_stage_ack_counts_writes(monkeypatch, tmp_path):
         }
     )
 
-    monkeypatch.setattr(plugin, "extract_facts", lambda ctx, transcript, *, batch_max_chars: [{"content": "fact one"}, {"content": "fact two"}])
+    monkeypatch.setattr(plugin, "extract_facts", lambda ctx, transcript: [{"content": "fact one"}, {"content": "fact two"}])
     monkeypatch.setattr(
         plugin,
         "write_facts_to_memory",

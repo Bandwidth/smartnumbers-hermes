@@ -174,7 +174,15 @@ def _handle_websocket_message(
             event_received_at=event_received_at,
         )
 
-    return _ingest_payload(ctx, archive, config, payload, _new_ack(event_id=None), event_received_at=event_received_at)
+    return _ingest_payload(
+        ctx,
+        archive,
+        config,
+        payload,
+        _new_ack(event_id=None),
+        metadata={"user_speaker": authoritative_speaker(config)},
+        event_received_at=event_received_at,
+    )
 
 
 def _metadata_from_event(event: Mapping[str, Any], config: TranscriptListenerConfig) -> dict[str, Any]:
@@ -202,9 +210,6 @@ def _ingest_payload(
         transcript = parse_transcript_payload(
             payload,
             metadata=metadata,
-            max_turns=config.max_turns,
-            max_turn_chars=config.max_turn_chars,
-            max_transcript_chars=config.max_transcript_chars,
         )
     except TranscriptParseError as exc:
         logger.warning("transcript payload rejected: %s", exc)
@@ -230,7 +235,7 @@ def _ingest_payload(
     if config.extract_to_memory:
         ack["stages"]["memory"]["attempted"] = True
         try:
-            facts = extract_facts(ctx, transcript, batch_max_chars=config.batch_max_chars)
+            facts = extract_facts(ctx, transcript)
             write_results = write_facts_to_memory(facts)
             writes_succeeded = sum(1 for r in write_results if r.success)
             ack["stages"]["memory"]["facts_extracted"] = len(facts)

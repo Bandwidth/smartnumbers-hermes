@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Any
 
 from .models import NormalizedTranscript, TranscriptTurn
@@ -54,55 +53,21 @@ EXTRACTION_INSTRUCTIONS = (
 )
 
 
-def extract_facts(ctx: Any, transcript: NormalizedTranscript, *, batch_max_chars: int = 12000) -> list[dict[str, Any]]:
-    """Extract facts from every transcript chunk without discarding long calls."""
+def extract_facts(ctx: Any, transcript: NormalizedTranscript) -> list[dict[str, Any]]:
+    """Extract durable facts from one complete, finished transcript."""
 
-    facts: list[dict[str, Any]] = []
-    for chunk in _transcript_chunks(transcript, batch_max_chars=max(1, batch_max_chars)):
-        result = ctx.llm.complete_structured(
-            instructions=EXTRACTION_INSTRUCTIONS,
-            input=[{"type": "text", "text": render_for_llm(chunk)}],
-            json_schema=FACT_EXTRACTION_SCHEMA,
-            schema_name="transcript_listener.facts",
-            purpose="transcript-listener.fact-extraction",
-            temperature=0.0,
-            max_tokens=1000,
-        )
-        parsed = result.parsed if isinstance(result.parsed, dict) else {}
-        chunk_facts = parsed.get("facts") if isinstance(parsed, dict) else []
-        facts.extend(validate_facts(chunk_facts, transcript))
-    return facts
-
-
-def _transcript_chunks(transcript: NormalizedTranscript, *, batch_max_chars: int) -> list[NormalizedTranscript]:
-    """Split only LLM input; archival and search always retain complete turns."""
-
-    chunks: list[NormalizedTranscript] = []
-    current: list[TranscriptTurn] = []
-    current_chars = 0
-    for turn in transcript.turns:
-        fragments = _turn_fragments(turn, batch_max_chars=batch_max_chars)
-        for fragment in fragments:
-            size = len(fragment.speaker_label) + len(fragment.text) + 2
-            if current and current_chars + size > batch_max_chars:
-                chunks.append(replace(transcript, turns=tuple(current)))
-                current = []
-                current_chars = 0
-            current.append(fragment)
-            current_chars += size
-    if current:
-        chunks.append(replace(transcript, turns=tuple(current)))
-    return chunks
-
-
-def _turn_fragments(turn: TranscriptTurn, *, batch_max_chars: int) -> list[TranscriptTurn]:
-    available = max(1, batch_max_chars - len(turn.speaker_label) - 2)
-    if len(turn.text) <= available:
-        return [turn]
-    return [
-        replace(turn, text=turn.text[start : start + available])
-        for start in range(0, len(turn.text), available)
-    ]
+    result = ctx.llm.complete_structured(
+        instructions=EXTRACTION_INSTRUCTIONS,
+        input=[{"type": "text", "text": render_for_llm(transcript)}],
+        json_schema=FACT_EXTRACTION_SCHEMA,
+        schema_name="transcript_listener.facts",
+        purpose="transcript-listener.fact-extraction",
+        temperature=0.0,
+        max_tokens=1000,
+    )
+    parsed = result.parsed if isinstance(result.parsed, dict) else {}
+    facts = parsed.get("facts") if isinstance(parsed, dict) else []
+    return validate_facts(facts, transcript)
 
 
 def validate_facts(facts: Any, transcript: NormalizedTranscript) -> list[dict[str, Any]]:

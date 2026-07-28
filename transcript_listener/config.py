@@ -23,8 +23,6 @@ class TranscriptListenerConfig:
     extract_to_memory: bool = True
     register_transcript_search_tool: bool = True
     notify_cli: bool = True
-    batch_max_chars: int = 12000
-    batch_idle_seconds: int = 30
     source_label: str = "external-reference"
     storage_path: Path | None = None
     download_timeout_seconds: int = 15
@@ -38,9 +36,6 @@ class TranscriptListenerConfig:
     trust_event_direction: bool = False
     activation_names: tuple[str, ...] = ()
     max_websocket_message_bytes: int = 1024 * 1024
-    max_turns: int | None = None
-    max_turn_chars: int | None = None
-    max_transcript_chars: int | None = None
     allowed_stream_hosts: tuple[str, ...] = ("connections.smartnumbers.labs.bandwidth.com",)
     allow_insecure_stream_url: bool = False
     allowed_transcript_hosts: tuple[str, ...] = ()
@@ -76,8 +71,6 @@ def config_from_mapping(entry: Mapping[str, Any]) -> TranscriptListenerConfig:
         extract_to_memory=_bool(entry.get("extract_to_memory"), True),
         register_transcript_search_tool=_bool(entry.get("register_transcript_search_tool"), True),
         notify_cli=_bool(entry.get("notify_cli"), True),
-        batch_max_chars=_int(entry.get("batch_max_chars"), 12000),
-        batch_idle_seconds=_int(entry.get("batch_idle_seconds"), 30),
         source_label=_str(entry.get("source_label"), "external-reference"),
         storage_path=Path(storage_path).expanduser() if isinstance(storage_path, str) and storage_path.strip() else None,
         download_timeout_seconds=_int(entry.get("download_timeout_seconds"), 15),
@@ -96,9 +89,6 @@ def config_from_mapping(entry: Mapping[str, Any]) -> TranscriptListenerConfig:
             minimum=1024,
             maximum=1024 * 1024 * 1024,
         ),
-        max_turns=_optional_bounded_int(entry.get("max_turns"), minimum=1, maximum=1_000_000),
-        max_turn_chars=_optional_bounded_int(entry.get("max_turn_chars"), minimum=128, maximum=100_000_000),
-        max_transcript_chars=_optional_bounded_int(entry.get("max_transcript_chars"), minimum=1024, maximum=1024 * 1024 * 1024),
         allowed_stream_hosts=_str_tuple(entry.get("allowed_stream_hosts")) or ("connections.smartnumbers.labs.bandwidth.com",),
         allow_insecure_stream_url=_bool(entry.get("allow_insecure_stream_url"), False),
         allowed_transcript_hosts=_str_tuple(entry.get("allowed_transcript_hosts")) or (),

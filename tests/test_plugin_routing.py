@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from transcript_listener import plugin
 from transcript_listener.config import config_from_mapping
 from transcript_listener.downloader import TranscriptDownloadError
@@ -35,6 +37,26 @@ class FakeDispatchContext:
         return json.dumps({"success": True, "job_id": "job_123"})
 
 
+class FakeDispatchResultContext(FakeDispatchContext):
+    def __init__(self, result):  # noqa: ANN001
+        super().__init__()
+        self.result = result
+
+    def dispatch_tool(self, tool_name, args):  # noqa: ANN001
+        self.calls.append((tool_name, args))
+        return self.result
+
+
+class InjectionTrackingContext:
+    def __init__(self):
+        self.inject_calls = 0
+
+    def inject_message(self, content, role="user"):  # noqa: ANN001
+        del content, role
+        self.inject_calls += 1
+        return True
+
+
 class FakeCommandLLM:
     def complete_structured(self, **kwargs):  # noqa: ANN003
         if kwargs.get("schema_name") == "transcript_listener.facts":
@@ -43,13 +65,11 @@ class FakeCommandLLM:
         return type("Result", (), {"parsed": {"is_command": True, "command": candidate}})()
 
 
-def test_transcript_url_event_downloads_then_imports(monkeypatch, tmp_path):
+def test_transcript_url_event_downloads_then_archives(monkeypatch, tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
             "download_timeout_seconds": 3,
             "max_download_bytes": 2048,
         }
@@ -87,7 +107,6 @@ def test_transcript_url_event_downloads_then_imports(monkeypatch, tmp_path):
     assert ack["stages"]["download"] == {"attempted": True, "success": True}
     assert ack["stages"]["parse"] == {"attempted": True, "success": True}
     assert ack["stages"]["archive"] == {"attempted": True, "success": True}
-    assert ack["stages"]["session_import"]["attempted"] is False
     assert ack["stages"]["memory"]["attempted"] is False
     assert ack["errors"] == []
 
@@ -96,9 +115,7 @@ def test_transcript_url_event_applies_markdown_metadata(monkeypatch, tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
             "user_speaker": "TO",
         }
     )
@@ -129,9 +146,7 @@ def test_raw_markdown_uses_configured_outbound_authority(tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
             "default_call_direction": "outbound",
             "activation_names": ["Ares"],
         }
@@ -149,9 +164,7 @@ def test_transcript_url_event_returns_ack_for_download_failure(monkeypatch, tmp_
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
         }
     )
 
@@ -175,13 +188,11 @@ def test_transcript_url_event_returns_ack_for_download_failure(monkeypatch, tmp_
     assert ack["errors"] == [{"stage": "download", "message": "boom"}]
 
 
-def test_direct_transcript_json_still_imports(tmp_path):
+def test_direct_transcript_json_still_archives(tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
         }
     )
 
@@ -200,9 +211,7 @@ def test_auto_review_skips_when_instructions_are_blank(tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
         }
     )
     ctx = FakeDispatchContext()
@@ -226,9 +235,7 @@ def test_auto_review_dispatches_one_shot_cron_job_when_instructions_exist(monkey
     archive.set_review_instructions("Use my configured preferences to decide what to do.")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
             "auto_review_deliver": "telegram",
             "auto_review_toolsets": ["smartnumbers", "memory", "todo"],
         }
@@ -254,15 +261,84 @@ def test_auto_review_dispatches_one_shot_cron_job_when_instructions_exist(monkey
     assert ack["stages"]["review"] == {
         "attempted": True,
         "success": True,
-        "status": "dispatched",
+        "status": "queued",
         "job_id": "job_123",
     }
     assert archive.get_review_state("conv_001") == {
         "review_requested_at": "2026-06-25T16:12:04Z",
         "review_job_id": "job_123",
-        "review_status": "dispatched",
+        "review_status": "queued",
         "review_error": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_result", "expected_error"),
+    [
+        (json.dumps({"success": False, "error": "cron unavailable"}), "cron job creation failed: cron unavailable"),
+        (json.dumps({"success": True}), "cron job creation succeeded without returning a job ID"),
+        ("not-json", "cron job creation returned invalid JSON"),
+        (None, "cron job creation returned an invalid response"),
+    ],
+)
+def test_auto_review_rejects_unconfirmed_cron_creation(raw_result, expected_error, tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.set_review_instructions("Review this call.")
+    config = config_from_mapping({"extract_to_memory": False})
+    ctx = FakeDispatchResultContext(raw_result)
+
+    ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert ack is not None
+    assert ack["success"] is False
+    assert ack["stages"]["review"] == {
+        "attempted": True,
+        "success": False,
+        "status": "error",
+        "job_id": None,
+        "error": expected_error,
+    }
+    assert ack["errors"] == [{"stage": "review", "message": expected_error}]
+    review_state = archive.get_review_state("conv_001")
+    assert review_state["review_requested_at"]
+    assert review_state == {
+        "review_requested_at": review_state["review_requested_at"],
+        "review_job_id": None,
+        "review_status": "error",
+        "review_error": expected_error,
+    }
+
+
+def test_failed_cron_creation_can_be_retried(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.set_review_instructions("Review this call.")
+    config = config_from_mapping({"extract_to_memory": False})
+    ctx = FakeDispatchResultContext(json.dumps({"success": False, "error": "temporary failure"}))
+
+    first_ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+    ctx.result = json.dumps({"success": True, "job_id": "job_retry"})
+    second_ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert first_ack is not None and first_ack["stages"]["review"]["status"] == "error"
+    assert second_ack is not None and second_ack["success"] is True
+    assert second_ack["stages"]["review"] == {
+        "attempted": True,
+        "success": True,
+        "status": "queued",
+        "job_id": "job_retry",
+    }
+    assert len(ctx.calls) == 2
+
+
+def test_transcript_import_does_not_inject_into_an_interactive_session(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    config = config_from_mapping({"extract_to_memory": False})
+    ctx = InjectionTrackingContext()
+
+    ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert ack is not None and ack["success"] is True
+    assert ctx.inject_calls == 0
 
 
 def test_auto_review_suppresses_duplicate_dispatch_after_callback_update(tmp_path):
@@ -270,9 +346,7 @@ def test_auto_review_suppresses_duplicate_dispatch_after_callback_update(tmp_pat
     archive.set_review_instructions("Review according to my saved policy.")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
         }
     )
     ctx = FakeDispatchContext()
@@ -283,7 +357,7 @@ def test_auto_review_suppresses_duplicate_dispatch_after_callback_update(tmp_pat
 
     assert len(ctx.calls) == 1
     assert first_ack is not None
-    assert first_ack["stages"]["review"]["status"] == "dispatched"
+    assert first_ack["stages"]["review"]["status"] == "queued"
     assert second_ack is not None
     assert second_ack["stages"]["review"] == {
         "attempted": False,
@@ -298,9 +372,7 @@ def test_archive_raw_false_skips_local_archive_write(tmp_path):
     config = config_from_mapping(
         {
             "archive_raw": False,
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
         }
     )
 
@@ -313,41 +385,11 @@ def test_archive_raw_false_skips_local_archive_write(tmp_path):
     assert ack["stages"]["archive"]["attempted"] is False
 
 
-def test_archive_raw_false_still_imports_to_session_db(monkeypatch, tmp_path):
-    archive = TranscriptArchive(tmp_path / "transcripts.db")
-    config = config_from_mapping(
-        {
-            "archive_raw": False,
-            "import_to_session_db": True,
-            "extract_to_memory": False,
-            "notify_cli": False,
-        }
-    )
-    imported: list[str] = []
-
-    def fake_import_to_session_db(transcript, *, source_label):
-        assert source_label == "external-reference"
-        imported.append(transcript.conversation_id)
-        return "external_ref_conv_001"
-
-    monkeypatch.setattr(plugin, "import_to_session_db", fake_import_to_session_db)
-
-    ack = plugin._handle_websocket_message(object(), archive, config, FIXTURE.read_text())
-
-    assert imported == ["conv_001"]
-    assert archive.search(query="short version", limit=5) == []
-    assert ack is not None
-    assert ack["success"] is True
-    assert ack["stages"]["session_import"] == {"attempted": True, "success": True, "state_session_id": "external_ref_conv_001"}
-
-
 def test_memory_stage_ack_counts_writes(monkeypatch, tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": True,
-            "notify_cli": False,
         }
     )
 
@@ -379,9 +421,7 @@ def test_named_to_command_creates_a_separate_powerful_job(tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
         {
-            "import_to_session_db": False,
             "extract_to_memory": False,
-            "notify_cli": False,
             "activation_names": ["Ares"],
         }
     )
@@ -409,7 +449,7 @@ def test_named_to_command_creates_a_separate_powerful_job(tmp_path):
 def test_command_replay_uses_turn_identity_not_command_text(tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
-        {"import_to_session_db": False, "extract_to_memory": False, "notify_cli": False, "activation_names": ["Ares"]}
+        {"extract_to_memory": False, "activation_names": ["Ares"]}
     )
     ctx = FakeDispatchContext()
     first = json.dumps(
@@ -434,7 +474,7 @@ def test_command_replay_uses_turn_identity_not_command_text(tmp_path):
 def test_multiple_named_commands_in_one_turn_dispatch_separately(tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
-        {"import_to_session_db": False, "extract_to_memory": False, "notify_cli": False, "activation_names": ["Ares"]}
+        {"extract_to_memory": False, "activation_names": ["Ares"]}
     )
     ctx = FakeDispatchContext()
     payload = json.dumps(

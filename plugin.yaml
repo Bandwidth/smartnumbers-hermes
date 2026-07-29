@@ -1,7 +1,7 @@
 manifest_version: 1
 name: smartnumbers
 version: "0.1.0"
-description: Import Smartnumbers transcripts into Hermes memory and reference history.
+description: Archive Smartnumbers transcripts and queue tool-capable Hermes post-call reviews.
 author: Bandwidth
 provides_tools:
   - transcript_search

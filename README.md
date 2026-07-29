@@ -1,8 +1,7 @@
 # Hermes Smartnumbers
 
-Hermes plugin for receiving Smartnumbers conversation transcripts, importing
-them into Hermes history and memory, and exposing transcript search and review
-tools.
+Hermes plugin for receiving and archiving Smartnumbers conversation transcripts,
+extracting durable memory, and queuing tool-capable post-call agent reviews.
 
 ## Install
 
@@ -83,7 +82,7 @@ plugins:
       run_listener: true
       auto_review_transcripts: true
       auto_review_deliver: "local"
-      # Omit auto_review_toolsets to preserve Hermes' full cron toolset.
+      # Omit auto_review_toolsets to preserve Hermes' configured cron toolset.
       # Set it when a post-call job should be restricted.
 ```
 
@@ -102,7 +101,18 @@ When `archive_raw` is enabled, transcripts are stored at
   instructions.
 
 When review instructions are present and `auto_review_transcripts` is enabled,
-the plugin schedules a one-shot Hermes cron task for each new transcript.
+the plugin asynchronously queues a one-shot Hermes cron task for each new
+transcript. The gateway scheduler runs that task in a fresh agent session with
+the configured model, toolsets, and cron approval policy. The plugin does not
+require Hermes' OpenAI-compatible API server or any additional local API
+authentication.
+
+The transcript archive is the review job's reference source. The agent reads it
+through `transcript_search`; the plugin does not create an inert SessionDB
+conversation or inject a message into an interactive CLI session. A review is
+recorded as `queued` only after the cron tool confirms success and returns a
+non-empty job ID. Invalid or unsuccessful creation responses are recorded as
+retryable review errors rather than successful dispatches.
 
 ## Post-Call Automation
 

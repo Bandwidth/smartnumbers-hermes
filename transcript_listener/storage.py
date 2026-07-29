@@ -351,7 +351,7 @@ class TranscriptArchive:
             return False
 
     def complete_execution(self, execution_key: str, *, job_id: str | None = None, error: str | None = None) -> None:
-        status = "dispatched" if not error else "error"
+        status = "queued" if not error else "error"
         with self._connect() as conn:
             conn.execute(
                 "UPDATE callback_executions SET status = ?, job_id = ?, error = ?, updated_at = ? WHERE execution_key = ?",

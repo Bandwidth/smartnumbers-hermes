@@ -20,7 +20,6 @@ from .memory_writer import write_facts_to_memory
 from .parser import TranscriptParseError, parse_transcript_payload
 from .review_config_tool import TRANSCRIPT_REVIEW_CONFIG_SCHEMA, make_transcript_review_config_handler
 from .search_tool import TRANSCRIPT_SEARCH_SCHEMA, make_transcript_search_handler
-from .session_import import import_to_session_db
 from .storage import TranscriptArchive
 from .ws_client import TranscriptWebSocketClient, start_daemon_listener, validate_stream_url
 
@@ -219,17 +218,6 @@ def _ingest_payload(
     ack["conversation_id"] = transcript.conversation_id
     ack["stages"]["parse"]["success"] = True
 
-    state_session_id = None
-    if config.import_to_session_db:
-        ack["stages"]["session_import"]["attempted"] = True
-        try:
-            state_session_id = import_to_session_db(transcript, source_label=config.source_label)
-            ack["stages"]["session_import"]["success"] = True
-            ack["stages"]["session_import"]["state_session_id"] = state_session_id
-        except Exception as exc:
-            logger.warning("transcript SessionDB import failed: %s", exc)
-            _add_ack_error(ack, "session_import", str(exc))
-
     extraction_status = "skipped"
     extraction_error = None
     if config.extract_to_memory:
@@ -256,7 +244,6 @@ def _ingest_payload(
         try:
             archive.save_transcript(
                 transcript,
-                state_session_id=state_session_id,
                 extraction_status=extraction_status,
                 extraction_error=extraction_error,
                 event_received_at=event_received_at,
@@ -277,15 +264,6 @@ def _ingest_payload(
             logger.warning("transcript archive write failed: %s", exc)
             _add_ack_error(ack, "archive", str(exc))
 
-    if config.notify_cli:
-        try:
-            ctx.inject_message(
-                f"Imported external transcript {transcript.conversation_id} ({len(transcript.turns)} turns).",
-                role="system",
-            )
-        except Exception:
-            pass
-
     return _finalize_ack(ack)
 
 
@@ -301,7 +279,6 @@ def _new_ack(*, event_id: str | None) -> dict[str, Any]:
             "parse": {"attempted": False, "success": False},
             "archive": {"attempted": False, "success": False},
             "review": {"attempted": False, "success": False, "status": "not_started", "job_id": None},
-            "session_import": {"attempted": False, "success": False, "state_session_id": None},
             "memory": {
                 "attempted": False,
                 "success": False,
@@ -351,7 +328,8 @@ def _maybe_dispatch_auto_review(
         return {"attempted": False, "success": False, "status": "skipped:no_instructions", "job_id": None}
 
     requested_at = _utc_now_iso()
-    dispatched: list[str | None] = []
+    queued_job_ids: list[str] = []
+    duplicate_count = 0
     errors: list[str] = []
     if callbacks:
         callback_key = _execution_key(
@@ -375,13 +353,13 @@ def _maybe_dispatch_auto_review(
                     prompt=_build_callback_prompt(transcript, callbacks, event_received_at=event_received_at),
                 )
                 archive.complete_execution(callback_key, job_id=job_id)
-                dispatched.append(job_id)
+                queued_job_ids.append(job_id)
             except Exception as exc:
                 error = str(exc)
                 archive.complete_execution(callback_key, error=error)
                 errors.append(error)
         else:
-            dispatched.append(None)
+            duplicate_count += 1
     if commands:
         for command in commands:
             command_key = _execution_key(
@@ -396,7 +374,7 @@ def _maybe_dispatch_auto_review(
                 callback_id=None,
                 authorization_quote=command.quote,
             ):
-                dispatched.append(None)
+                duplicate_count += 1
                 continue
             try:
                 mutation_token = archive.create_callback_mutation_token()
@@ -415,18 +393,18 @@ def _maybe_dispatch_auto_review(
                     ),
                 )
                 archive.complete_execution(command_key, job_id=job_id)
-                dispatched.append(job_id)
+                queued_job_ids.append(job_id)
             except Exception as exc:
                 error = str(exc)
                 archive.complete_execution(command_key, error=error)
                 errors.append(error)
-    job_id = next((item for item in dispatched if item), None)
+    job_id = queued_job_ids[0] if queued_job_ids else None
     if errors:
         error = "; ".join(errors)
         logger.warning("transcript post-call dispatch failed: %s", error)
         archive.mark_review_status(transcript.conversation_id, review_requested_at=requested_at, review_status="error", review_error=error)
         return {"attempted": True, "success": False, "status": "error", "job_id": job_id, "error": error}
-    if job_id is None:
+    if not queued_job_ids and duplicate_count:
         review_state = archive.get_review_state(transcript.conversation_id)
         return {
             "attempted": False,
@@ -438,9 +416,9 @@ def _maybe_dispatch_auto_review(
         transcript.conversation_id,
         review_requested_at=requested_at,
         review_job_id=job_id,
-        review_status="dispatched",
+        review_status="queued",
     )
-    return {"attempted": True, "success": True, "status": "dispatched", "job_id": job_id}
+    return {"attempted": True, "success": True, "status": "queued", "job_id": job_id}
 
 
 def _dispatch_post_call_job(
@@ -452,7 +430,7 @@ def _dispatch_post_call_job(
     event_received_at: str | None,
     name: str,
     prompt: str,
-) -> str | None:
+) -> str:
     args: dict[str, Any] = {
         "action": "create",
         "schedule": requested_at,
@@ -532,22 +510,29 @@ def _execution_key(kind: str, identity: str, content: str) -> str:
     return sha256(f"{kind}\0{identity}\0{content}".encode("utf-8")).hexdigest()
 
 
-def _extract_review_job_id(raw_result: Any) -> str | None:
+def _extract_review_job_id(raw_result: Any) -> str:
     parsed: Any = raw_result
     if isinstance(raw_result, str):
         try:
             parsed = json.loads(raw_result)
-        except json.JSONDecodeError:
-            return None
-    if isinstance(parsed, Mapping):
-        for key in ("job_id", "id"):
-            value = parsed.get(key)
-            if value:
-                return str(value)
-        job = parsed.get("job")
-        if isinstance(job, Mapping) and job.get("id"):
-            return str(job["id"])
-    return None
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("cron job creation returned invalid JSON") from exc
+    if not isinstance(parsed, Mapping):
+        raise RuntimeError("cron job creation returned an invalid response")
+    if parsed.get("success") is not True:
+        detail = parsed.get("error") or parsed.get("message") or "unknown error"
+        raise RuntimeError(f"cron job creation failed: {detail}")
+
+    candidates = [parsed.get("job_id"), parsed.get("id")]
+    job = parsed.get("job")
+    if isinstance(job, Mapping):
+        candidates.extend((job.get("job_id"), job.get("id")))
+    for value in candidates:
+        if value is not None and not isinstance(value, bool):
+            job_id = str(value).strip()
+            if job_id:
+                return job_id
+    raise RuntimeError("cron job creation succeeded without returning a job ID")
 
 
 def _utc_now_iso() -> str:

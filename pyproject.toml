@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hermes-smartnumbers"
 version = "0.1.0"
-description = "Hermes plugin for ingesting Smartnumbers conversation transcripts"
+description = "Hermes plugin for archiving Smartnumbers transcripts and queuing post-call agent reviews"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -19,11 +19,8 @@ class TranscriptListenerConfig:
     user_speaker: str = "TO"
     run_listener: bool = False
     archive_raw: bool = True
-    import_to_session_db: bool = True
     extract_to_memory: bool = True
     register_transcript_search_tool: bool = True
-    notify_cli: bool = True
-    source_label: str = "external-reference"
     storage_path: Path | None = None
     download_timeout_seconds: int = 15
     max_download_bytes: int | None = None
@@ -67,11 +64,8 @@ def config_from_mapping(entry: Mapping[str, Any]) -> TranscriptListenerConfig:
         user_speaker=_str(entry.get("user_speaker"), "TO"),
         run_listener=_bool(entry.get("run_listener"), False),
         archive_raw=_bool(entry.get("archive_raw"), True),
-        import_to_session_db=_bool(entry.get("import_to_session_db"), True),
         extract_to_memory=_bool(entry.get("extract_to_memory"), True),
         register_transcript_search_tool=_bool(entry.get("register_transcript_search_tool"), True),
-        notify_cli=_bool(entry.get("notify_cli"), True),
-        source_label=_str(entry.get("source_label"), "external-reference"),
         storage_path=Path(storage_path).expanduser() if isinstance(storage_path, str) and storage_path.strip() else None,
         download_timeout_seconds=_int(entry.get("download_timeout_seconds"), 15),
         max_download_bytes=_optional_bounded_int(entry.get("max_download_bytes"), minimum=1, maximum=1024 * 1024 * 1024),

@@ -91,3 +91,5 @@ def test_register_adds_cli_command(monkeypatch, tmp_path):
 
     assert ctx.cli_commands[0]["name"] == "smartnumbers"
     assert {tool["toolset"] for tool in ctx.tools} == {"smartnumbers"}
+    transcript_search = next(tool for tool in ctx.tools if tool["name"] == "transcript_search")
+    assert "phone calls" in transcript_search["description"].lower()

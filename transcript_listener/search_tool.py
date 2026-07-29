@@ -11,17 +11,29 @@ from .storage import TranscriptArchive
 TRANSCRIPT_SEARCH_SCHEMA = {
     "name": "transcript_search",
     "description": (
-        "Search external conversation transcripts imported by the transcript listener. "
-        "Use this for direct lookup in raw external transcript history, speaker filtering, "
-        "recent call lookup, or provenance-heavy retrieval. Results are newest-first by "
-        "the time Hermes received the transcript event."
+        "Search transcripts of inbound and outbound phone calls imported by the "
+        "Smartnumbers transcript listener. Use this tool when the user asks what was "
+        "said, discussed, promised, or agreed during a phone call; wants to find calls "
+        "by participant, date, speaker, or spoken content; or needs the exact wording "
+        "and provenance of a call. This searches archived phone-call transcripts, not "
+        "Hermes chat history, email, or other conversations. Results are newest-first "
+        "by the time Hermes received the transcript event."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Text to search for in transcript turns."},
-            "external_session_id": {"type": "string", "description": "Limit search to one external conversation id."},
-            "speaker": {"type": "string", "description": "Filter by speaker id or speaker label."},
+            "query": {
+                "type": "string",
+                "description": "Words or phrases to find in the spoken turns of archived phone calls.",
+            },
+            "external_session_id": {
+                "type": "string",
+                "description": "Limit the search to one phone call's external conversation ID.",
+            },
+            "speaker": {
+                "type": "string",
+                "description": "Filter phone-call turns by participant speaker ID or label.",
+            },
             "since": {"type": "string", "description": "Optional event_received_at ISO timestamp lower bound."},
             "until": {"type": "string", "description": "Optional event_received_at ISO timestamp upper bound."},
             "limit": {"type": "integer", "description": "Maximum results to return, clamped to 1-50.", "default": 10},

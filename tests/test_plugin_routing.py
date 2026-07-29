@@ -1,4 +1,7 @@
 import json
+import importlib
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -63,6 +66,27 @@ class FakeCommandLLM:
             return type("Result", (), {"parsed": {"facts": []}})()
         candidate = kwargs["input"][0]["text"].split("Candidate text after activation:\n", 1)[1].strip()
         return type("Result", (), {"parsed": {"is_command": True, "command": candidate}})()
+
+
+def test_ensure_cronjob_tool_registered_loads_lazy_hermes_tool(monkeypatch):
+    class FakeRegistry:
+        def get_entry(self, name):  # noqa: ANN001
+            assert name == "cronjob"
+            return None
+
+    tools_module = types.ModuleType("tools")
+    tools_module.__path__ = []
+    registry_module = types.ModuleType("tools.registry")
+    registry_module.registry = FakeRegistry()
+    imported = []
+
+    monkeypatch.setitem(sys.modules, "tools", tools_module)
+    monkeypatch.setitem(sys.modules, "tools.registry", registry_module)
+    monkeypatch.setattr(importlib, "import_module", lambda name: imported.append(name))
+
+    plugin._ensure_cronjob_tool_registered()
+
+    assert imported == ["tools.cronjob_tools"]
 
 
 def test_transcript_url_event_downloads_then_archives(monkeypatch, tmp_path):

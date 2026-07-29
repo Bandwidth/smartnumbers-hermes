@@ -441,8 +441,22 @@ def _dispatch_post_call_job(
     toolsets = getattr(config, "auto_review_toolsets", None)
     if toolsets:
         args["enabled_toolsets"] = list(toolsets)
+    _ensure_cronjob_tool_registered()
     raw_result = getattr(ctx, "dispatch_tool")("cronjob", args)
     return _extract_review_job_id(raw_result)
+
+
+def _ensure_cronjob_tool_registered() -> None:
+    """Load Hermes' lazy built-in cron tool for background listener dispatches."""
+    try:
+        from tools.registry import registry
+    except ModuleNotFoundError:
+        # Keep the plugin importable outside a Hermes runtime, including tests.
+        return
+    if registry.get_entry("cronjob") is None:
+        import importlib
+
+        importlib.import_module("tools.cronjob_tools")
 
 
 def _build_callback_prompt(transcript: Any, callbacks: list[Any], *, event_received_at: str | None) -> str:

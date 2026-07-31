@@ -19,20 +19,23 @@ class TranscriptListenerConfig:
     user_speaker: str = "TO"
     run_listener: bool = False
     archive_raw: bool = True
-    import_to_session_db: bool = True
     extract_to_memory: bool = True
     register_transcript_search_tool: bool = True
-    notify_cli: bool = True
-    batch_max_chars: int = 12000
-    batch_idle_seconds: int = 30
-    source_label: str = "external-reference"
     storage_path: Path | None = None
     download_timeout_seconds: int = 15
-    max_download_bytes: int = 5 * 1024 * 1024
+    max_download_bytes: int | None = None
     allow_insecure_transcript_urls: bool = False
     auto_review_transcripts: bool = True
     auto_review_deliver: str = "local"
     auto_review_toolsets: tuple[str, ...] | None = None
+    default_call_direction: str = "inbound"
+    user_speaker_by_direction: tuple[tuple[str, str], ...] = (("inbound", "TO"), ("outbound", "FROM"))
+    trust_event_direction: bool = False
+    activation_names: tuple[str, ...] = ()
+    max_websocket_message_bytes: int = 1024 * 1024
+    allowed_stream_hosts: tuple[str, ...] = ("connections.smartnumbers.labs.bandwidth.com",)
+    allow_insecure_stream_url: bool = False
+    allowed_transcript_hosts: tuple[str, ...] = ()
 
 
 def load_plugin_config(plugin_key: str = "smartnumbers") -> TranscriptListenerConfig:
@@ -61,20 +64,28 @@ def config_from_mapping(entry: Mapping[str, Any]) -> TranscriptListenerConfig:
         user_speaker=_str(entry.get("user_speaker"), "TO"),
         run_listener=_bool(entry.get("run_listener"), False),
         archive_raw=_bool(entry.get("archive_raw"), True),
-        import_to_session_db=_bool(entry.get("import_to_session_db"), True),
         extract_to_memory=_bool(entry.get("extract_to_memory"), True),
         register_transcript_search_tool=_bool(entry.get("register_transcript_search_tool"), True),
-        notify_cli=_bool(entry.get("notify_cli"), True),
-        batch_max_chars=_int(entry.get("batch_max_chars"), 12000),
-        batch_idle_seconds=_int(entry.get("batch_idle_seconds"), 30),
-        source_label=_str(entry.get("source_label"), "external-reference"),
         storage_path=Path(storage_path).expanduser() if isinstance(storage_path, str) and storage_path.strip() else None,
         download_timeout_seconds=_int(entry.get("download_timeout_seconds"), 15),
-        max_download_bytes=_int(entry.get("max_download_bytes"), 5 * 1024 * 1024),
+        max_download_bytes=_optional_bounded_int(entry.get("max_download_bytes"), minimum=1, maximum=1024 * 1024 * 1024),
         allow_insecure_transcript_urls=_bool(entry.get("allow_insecure_transcript_urls"), False),
         auto_review_transcripts=_bool(entry.get("auto_review_transcripts"), True),
         auto_review_deliver=_str(entry.get("auto_review_deliver"), "local"),
         auto_review_toolsets=_str_tuple(entry.get("auto_review_toolsets")),
+        default_call_direction=_call_direction(entry.get("default_call_direction"), "inbound"),
+        user_speaker_by_direction=_speaker_mapping(entry.get("user_speaker_by_direction"), fallback=_str(entry.get("user_speaker"), "TO")),
+        trust_event_direction=_bool(entry.get("trust_event_direction"), False),
+        activation_names=_str_tuple(entry.get("activation_names")) or (),
+        max_websocket_message_bytes=_bounded_int(
+            entry.get("max_websocket_message_bytes"),
+            1024 * 1024,
+            minimum=1024,
+            maximum=1024 * 1024 * 1024,
+        ),
+        allowed_stream_hosts=_str_tuple(entry.get("allowed_stream_hosts")) or ("connections.smartnumbers.labs.bandwidth.com",),
+        allow_insecure_stream_url=_bool(entry.get("allow_insecure_stream_url"), False),
+        allowed_transcript_hosts=_str_tuple(entry.get("allowed_transcript_hosts")) or (),
     )
 
 
@@ -106,6 +117,16 @@ def _int(value: Any, default: int) -> int:
         return default
 
 
+def _bounded_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
+    return min(maximum, max(minimum, _int(value, default)))
+
+
+def _optional_bounded_int(value: Any, *, minimum: int, maximum: int) -> int | None:
+    if value is None or value == "":
+        return None
+    return _bounded_int(value, minimum, minimum=minimum, maximum=maximum)
+
+
 def _str_tuple(value: Any) -> tuple[str, ...] | None:
     if isinstance(value, str):
         items = [item.strip() for item in value.split(",")]
@@ -117,3 +138,18 @@ def _str_tuple(value: Any) -> tuple[str, ...] | None:
         items = [item.strip() for item in value if isinstance(item, str)]
         return tuple(item for item in items if item) or None
     return None
+
+
+def _call_direction(value: Any, default: str) -> str:
+    candidate = _str(value, default).lower()
+    return candidate if candidate in {"inbound", "outbound"} else default
+
+
+def _speaker_mapping(value: Any, *, fallback: str) -> tuple[tuple[str, str], ...]:
+    mapping = {"inbound": fallback, "outbound": "FROM"}
+    if isinstance(value, Mapping):
+        for direction in ("inbound", "outbound"):
+            speaker = _str(value.get(direction))
+            if speaker:
+                mapping[direction] = speaker
+    return tuple(mapping.items())

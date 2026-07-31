@@ -93,8 +93,8 @@ def test_run_browser_setup_uses_browser_and_container_urls_separately(monkeypatc
     real_build_connect_url = setup_flow.build_connect_url
 
     class FakeCallbackServer:
-        def __init__(self, *, bind_host, redirect_host, port):
-            captured["callback"] = (bind_host, redirect_host, port)
+        def __init__(self, *, bind_host, redirect_host, port, allow_non_loopback_bind):
+            captured["callback"] = (bind_host, redirect_host, port, allow_non_loopback_bind)
             self.redirect_uri = "http://localhost:3021/callback"
 
         def __enter__(self):
@@ -140,7 +140,7 @@ def test_run_browser_setup_uses_browser_and_container_urls_separately(monkeypatc
     )
 
     assert result == token
-    assert captured["callback"] == ("0.0.0.0", "localhost", 3021)
+    assert captured["callback"] == ("0.0.0.0", "localhost", 3021, True)
     assert captured["auth_url"].startswith("http://localhost:3000/hermes/connect?")
     assert captured["exchange"]["app_url"] == "http://frontend:3000"
     assert captured["exchange"]["code"] == "mock-code"
@@ -265,6 +265,39 @@ def test_local_setup_allows_a_custom_http_exchange_url():
     )
 
 
+def test_callback_server_allows_non_loopback_bind_only_for_local_setup(monkeypatch):
+    captured = {}
+
+    class FakeHTTPServer:
+        server_port = 3021
+
+        def __init__(self, address, handler):
+            captured["address"] = address
+            captured["handler"] = handler
+
+        def serve_forever(self):
+            return None
+
+    monkeypatch.setattr(setup_flow, "_CallbackHTTPServer", FakeHTTPServer)
+
+    server = setup_flow.CallbackServer(
+        bind_host="0.0.0.0",
+        redirect_host="localhost",
+        port=3021,
+        allow_non_loopback_bind=True,
+    )
+
+    assert server.redirect_uri == "http://localhost:3021/callback"
+    assert captured["address"] == ("0.0.0.0", 3021)
+
+    try:
+        setup_flow.CallbackServer(bind_host="0.0.0.0", redirect_host="localhost", port=3021)
+    except setup_flow.SetupError as exc:
+        assert str(exc) == "callback bind host must be loopback unless local setup is enabled"
+    else:
+        raise AssertionError("expected production setup to reject a non-loopback callback bind")
+
+
 def test_persist_setup_result_uses_hermes_env_and_config(monkeypatch):
     saved_env = []
     saved_configs = []
@@ -296,8 +329,22 @@ def test_persist_setup_result_uses_hermes_env_and_config(monkeypatch):
     assert "smartnumbers" in cfg["plugins"]["enabled"]
     assert cfg["plugins"]["entries"]["smartnumbers"]["run_listener"] is True
     assert cfg["plugins"]["entries"]["smartnumbers"]["stream_url"] == "wss://smart.example/ws/hermes"
+    assert cfg["plugins"]["entries"]["smartnumbers"]["allow_insecure_stream_url"] is False
     assert cfg["plugins"]["entries"]["smartnumbers"]["key_prefix"] == "bwa_key_"
     assert saved_configs
+
+    setup_flow.persist_setup_result(
+        setup_flow.SetupToken(
+            api_key="bwa_key_local",
+            key_prefix="bwa_local_",
+            websocket_url="ws://connection-server:8000/ws/hermes",
+            permissions=("smart-numbers:connect",),
+        )
+    )
+
+    assert cfg["plugins"]["entries"]["smartnumbers"]["stream_url"] == "ws://connection-server:8000/ws/hermes"
+    assert cfg["plugins"]["entries"]["smartnumbers"]["allow_insecure_stream_url"] is True
+    assert cfg["plugins"]["entries"]["smartnumbers"]["allowed_stream_hosts"] == ["connection-server"]
 
 
 def test_clear_setup_disables_listener_and_removes_secret(monkeypatch):
@@ -311,6 +358,7 @@ def test_clear_setup_disables_listener_and_removes_secret(monkeypatch):
                 "smartnumbers": {
                     "run_listener": True,
                     "stream_url": "wss://smart.example/ws/hermes",
+                    "allow_insecure_stream_url": True,
                     "key_prefix": "bwa_key_",
                     "last_setup_at": "2026-01-01T00:00:00Z",
                 }

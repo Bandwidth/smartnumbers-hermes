@@ -116,7 +116,12 @@ def run_browser_setup(
             read_callback,
         )
     else:
-        with CallbackServer(bind_host=callback_bind_host, redirect_host=callback_host, port=callback_port) as callback_server:
+        with CallbackServer(
+            bind_host=callback_bind_host,
+            redirect_host=callback_host,
+            port=callback_port,
+            allow_non_loopback_bind=local,
+        ) as callback_server:
             redirect_uri = callback_server.redirect_uri
             auth_url = build_connect_url(
                 app_url=setup_url,
@@ -282,6 +287,9 @@ def persist_setup_result(
     api_key_env: str = API_KEY_ENV,
     app_url: str | None = None,
 ) -> None:
+    parsed_stream_url = urlparse(token.websocket_url)
+    allow_insecure_stream_url = parsed_stream_url.scheme == "ws"
+    _validate_websocket_url(token.websocket_url, allow_insecure=allow_insecure_stream_url)
     try:
         from hermes_cli.config import load_config, save_config, save_env_value
     except ImportError as exc:
@@ -301,10 +309,14 @@ def persist_setup_result(
         {
             "run_listener": True,
             "stream_url": token.websocket_url,
+            "allow_insecure_stream_url": allow_insecure_stream_url,
             "key_prefix": token.key_prefix,
             "last_setup_at": _utc_now_iso(),
         }
     )
+    stream_host = parsed_stream_url.hostname
+    if stream_host:
+        entry["allowed_stream_hosts"] = [stream_host]
     if app_url:
         entry["app_url"] = normalize_app_url(app_url)
     save_config(cfg)
@@ -320,7 +332,7 @@ def clear_setup(*, plugin_key: str = PLUGIN_KEY, api_key_env: str = API_KEY_ENV)
     cfg = load_config()
     entry = cfg.get("plugins", {}).get("entries", {}).get(plugin_key)
     if isinstance(entry, dict):
-        for key in ("stream_url", "key_prefix", "last_setup_at"):
+        for key in ("stream_url", "allow_insecure_stream_url", "key_prefix", "last_setup_at", "allowed_stream_hosts"):
             entry.pop(key, None)
         entry["run_listener"] = False
         save_config(cfg)
@@ -356,8 +368,10 @@ class CallbackServer:
         bind_host: str = "127.0.0.1",
         redirect_host: str = "127.0.0.1",
         port: int = 0,
+        allow_non_loopback_bind: bool = False,
     ) -> None:
         _validate_callback_endpoint(redirect_host, port)
+        _validate_callback_bind_endpoint(bind_host, port, allow_non_loopback=allow_non_loopback_bind)
         self._redirect_host = redirect_host
         self._server = _CallbackHTTPServer((bind_host, port), _CallbackHandler)
         self._thread = threading.Thread(target=self._server.serve_forever, name="transcript-listener-setup-callback", daemon=True)
@@ -434,6 +448,15 @@ def _is_loopback_host(host: str | None) -> bool:
 def _validate_callback_endpoint(host: str, port: int) -> None:
     if not _is_loopback_host(host):
         raise SetupError("callback host must be a loopback hostname or address")
+    if not 0 <= port <= 65535:
+        raise SetupError("callback port must be between 0 and 65535")
+
+
+def _validate_callback_bind_endpoint(host: str, port: int, *, allow_non_loopback: bool) -> None:
+    if not isinstance(host, str) or not host.strip() or any(ord(char) <= 32 for char in host):
+        raise SetupError("callback bind host is invalid")
+    if not allow_non_loopback and not _is_loopback_host(host):
+        raise SetupError("callback bind host must be loopback unless local setup is enabled")
     if not 0 <= port <= 65535:
         raise SetupError("callback port must be between 0 and 65535")
 

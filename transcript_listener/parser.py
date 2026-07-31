@@ -20,7 +20,11 @@ MARKDOWN_TURN_RE = re.compile(
 )
 
 
-def parse_transcript_payload(payload: str | bytes | Mapping[str, Any], *, metadata: Mapping[str, Any] | None = None) -> NormalizedTranscript:
+def parse_transcript_payload(
+    payload: str | bytes | Mapping[str, Any],
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> NormalizedTranscript:
     """Parse transcript JSON or Markdown into the internal model.
 
     Accepted input shape::
@@ -72,7 +76,11 @@ def _coerce_mapping(payload: str | bytes | Mapping[str, Any]) -> Mapping[str, An
     raise TranscriptParseError("Transcript payload must be JSON text or a mapping")
 
 
-def _parse_markdown(payload: str | bytes | Mapping[str, Any], *, metadata: Mapping[str, Any]) -> NormalizedTranscript:
+def _parse_markdown(
+    payload: str | bytes | Mapping[str, Any],
+    *,
+    metadata: Mapping[str, Any],
+) -> NormalizedTranscript:
     if isinstance(payload, bytes):
         payload = payload.decode("utf-8")
     if not isinstance(payload, str):
@@ -152,7 +160,10 @@ def _parse_participants(value: Any) -> dict[str, str]:
     return participants
 
 
-def _parse_turns(value: Any, participants: Mapping[str, str]) -> list[TranscriptTurn]:
+def _parse_turns(
+    value: Any,
+    participants: Mapping[str, str],
+) -> list[TranscriptTurn]:
     if not isinstance(value, list):
         raise TranscriptParseError("turns must be an array")
     turns: list[TranscriptTurn] = []
@@ -170,6 +181,7 @@ def _parse_turns(value: Any, participants: Mapping[str, str]) -> list[Transcript
                 speaker_label=participants.get(speaker, speaker),
                 text=text,
                 timestamp=timestamp_text or None,
+                source_turn_id=_optional_str(item.get("turn_id") or item.get("id")) or None,
             )
         )
     if not turns:

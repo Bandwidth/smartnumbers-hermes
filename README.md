@@ -1,8 +1,7 @@
 # Hermes Smartnumbers
 
-Hermes plugin for receiving Smartnumbers conversation transcripts, importing
-them into Hermes history and memory, and exposing transcript search and review
-tools.
+Hermes plugin for receiving and archiving Smartnumbers conversation transcripts,
+extracting durable memory, and queuing tool-capable post-call agent reviews.
 
 ## Install
 
@@ -70,8 +69,9 @@ hermes smartnumbers clear
 
 ## Configuration
 
-Browser setup writes the required connection values. Additional behavior can
-be configured in `$HERMES_HOME/config.yaml`:
+Browser setup writes every required connection value. No new environment
+variables or configuration entries are required for normal production use.
+The following optional settings are the common behavior overrides:
 
 ```yaml
 plugins:
@@ -80,20 +80,18 @@ plugins:
   entries:
     smartnumbers:
       run_listener: true
-      stream_url: "wss://connections.smartnumbers.labs.bandwidth.com/ws/hermes"
-      app_url: "https://smartnumbers.labs.bandwidth.com"
-      user_speaker: "TO"
-      archive_raw: true
-      import_to_session_db: true
-      extract_to_memory: true
-      register_transcript_search_tool: true
-      notify_cli: true
       auto_review_transcripts: true
       auto_review_deliver: "local"
-      download_timeout_seconds: 15
-      max_download_bytes: 5242880
-      allow_insecure_transcript_urls: false
+      # Omit auto_review_toolsets to preserve Hermes' configured cron toolset.
+      # Set it when a post-call job should be restricted.
 ```
+
+Advanced overrides are optional: `activation_names` adds STT aliases;
+`user_speaker_by_direction` changes the default inbound `TO` and outbound
+`FROM` authority mapping; `trust_event_direction` accepts authenticated provider
+direction metadata; `auto_review_toolsets` restricts post-call tool access; and
+`allowed_transcript_hosts` pins production transcript storage hosts. Setup saves
+the approved stream host automatically.
 
 When `archive_raw` is enabled, transcripts are stored at
 `$HERMES_HOME/transcript_listener/transcripts.db`. The plugin exposes:
@@ -103,7 +101,113 @@ When `archive_raw` is enabled, transcripts are stored at
   instructions.
 
 When review instructions are present and `auto_review_transcripts` is enabled,
-the plugin schedules a one-shot Hermes cron task for each new transcript.
+the plugin asynchronously queues a one-shot Hermes cron task for each new
+transcript. The gateway scheduler runs that task in a fresh agent session with
+the configured model, toolsets, and cron approval policy. The plugin does not
+require Hermes' OpenAI-compatible API server or any additional local API
+authentication.
+
+The transcript archive is the review job's reference source. The agent reads it
+through `transcript_search`; the plugin does not create an inert SessionDB
+conversation or inject a message into an interactive CLI session. A review is
+recorded as `queued` only after the cron tool confirms success and returns a
+non-empty job ID. Invalid or unsuccessful creation responses are recorded as
+retryable review errors rather than successful dispatches.
+
+## Post-Call Automation
+
+Post-call behavior is generic. There are no callback types for calendars,
+email, tasks, or other services. A callback is user-authorized natural-language
+instructions that Hermes evaluates after a new call, with the same configured
+cron tool access as the existing automatic review job.
+
+`transcript_review_config` retains its existing actions:
+
+- `show`, `set`, and `clear` manage the `default-review` callback.
+
+It also supports independent callbacks:
+
+- `list`
+- `register` with a new `id`, `name`, and `instructions`
+- `update` with an existing `id`, `name`, and `instructions`
+- `enable`, `disable`, and `remove` with `id`
+
+For example, Hermes can register an arbitrary callback after a normal user
+request:
+
+```text
+Whenever I agree to attend an event on a call, add it to my calendar.
+```
+
+### Named Call Commands
+
+The configured user speaker can issue a one-time arbitrary Hermes command at
+any point in a turn by directly addressing Hermes with its active branding name
+or its first word. If the branding name is `Ares Agent`, both forms are
+accepted:
+
+```text
+TO: Ares, add that event to my calendar.
+TO: Hey Ares Agent, research that company and send me a summary.
+TO: Friday sounds good. Ares, add that to my calendar. What time should I arrive?
+```
+
+Commands from the other party and incidental mentions of the name do not
+authorize work. The local direction mapping determines the authoritative
+speaker; a payload cannot select it. Current inbound calls use `TO` by default.
+Hermes extracts the verbatim command span without requiring it to consume the
+rest of the speaker turn. Multiple direct addresses in one turn are independent
+commands.
+
+Named command jobs and generic callback jobs keep `auto_review_toolsets` as-is.
+When it is omitted, Hermes' cron default toolsets are preserved. Hermes' normal
+approval configuration, including `approvals.mode` and `approvals.cron_mode`,
+continues to control tool approvals.
+
+Callback changes from a scheduled job require a short-lived authorization token
+issued only to a named-command job. This prevents a normal callback or call
+participant from silently modifying future callback behavior.
+
+### Trust Boundary
+
+Transcript turns are external call data. They can provide dates, contacts,
+locations, and context, but they do not independently authorize Hermes actions.
+Only a named command from the configured user speaker or an already registered
+callback creates an action goal. When a user intentionally grants a generic
+callback broad Hermes tool access, its instructions should be reviewed as
+carefully as any other autonomous Hermes automation.
+
+Durable-fact extraction accepts facts stated directly by the configured user
+speaker. A fact stated by another participant is eligible only when a later
+turn from the configured user speaker clearly agrees with or verifies it. Each
+fact must cite the numbered assertion turn and exact source text; caller facts
+must also cite the later user-confirmation turn. Unconfirmed caller statements
+remain available through transcript search but are not written to memory.
+
+`transcript_search` returns `source_trust: "external-untrusted"` and supports
+pagination through `offset` and `next_offset` so long calls can be retrieved
+without silently truncating the result set.
+
+Downloaded transcript size is not capped by default. Complete transcripts are
+archived, and durable-fact extraction evaluates the complete finished transcript
+in one structured LLM request. WebSocket event envelopes
+are capped at 1 MiB by default through `max_websocket_message_bytes`; deployments
+can raise that limit explicitly without limiting the referenced S3 transcript.
+
+## Network And Storage Safety
+
+The listener requires an approved `wss://` stream host before sending its API
+key. Setup records the provider-approved stream host. Custom plaintext streams
+are supported only for explicit local development configuration.
+
+Transcript URL downloads reject redirects and private, loopback, link-local,
+multicast, reserved, and metadata-network addresses. Set
+`allowed_transcript_hosts` when production transcript storage has a stable host
+list.
+
+The archive directory, database, SQLite sidecars, and listener lock are created
+with private owner-only permissions. Archive execution records prevent replayed
+events from scheduling duplicate callback or named-command jobs.
 
 ## WebSocket Flow
 

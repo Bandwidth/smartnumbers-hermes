@@ -18,6 +18,7 @@ from .renderer import render_for_sessiondb
 
 
 DEFAULT_CALLBACK_ID = "default-review"
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class TranscriptCallback:
     name: str
     instructions: str
     enabled: bool
+    deliver: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +59,7 @@ class TranscriptCallback:
             "name": self.name,
             "instructions": self.instructions,
             "enabled": self.enabled,
+            "deliver": self.deliver,
         }
 
 
@@ -126,6 +129,7 @@ class TranscriptArchive:
                     name TEXT NOT NULL,
                     instructions TEXT NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    deliver TEXT,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
@@ -162,6 +166,9 @@ class TranscriptArchive:
                 if column not in columns:
                     conn.execute(f"ALTER TABLE transcripts ADD COLUMN {column} TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_event_received_at ON transcripts(event_received_at)")
+            callback_columns = {row["name"] for row in conn.execute("PRAGMA table_info(transcript_callbacks)")}
+            if "deliver" not in callback_columns:
+                conn.execute("ALTER TABLE transcript_callbacks ADD COLUMN deliver TEXT")
 
     def save_transcript(
         self,
@@ -250,14 +257,20 @@ class TranscriptArchive:
         callback = self.get_callback(DEFAULT_CALLBACK_ID)
         return callback.instructions if callback and callback.enabled else ""
 
-    def set_review_instructions(self, instructions: str) -> None:
+    def set_review_instructions(self, instructions: str, *, deliver: Any = _UNSET) -> None:
         instructions = instructions.strip()
         if instructions:
+            existing = self.get_callback(DEFAULT_CALLBACK_ID)
+            if deliver is _UNSET:
+                effective_deliver = existing.deliver if existing else None
+            else:
+                effective_deliver = deliver
             self.upsert_callback(
                 callback_id=DEFAULT_CALLBACK_ID,
                 name="Default transcript review",
                 instructions=instructions,
                 enabled=True,
+                deliver=effective_deliver,
             )
         else:
             self.remove_callback(DEFAULT_CALLBACK_ID)
@@ -266,7 +279,7 @@ class TranscriptArchive:
         where = "WHERE enabled = 1" if enabled_only else ""
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT callback_id, name, instructions, enabled FROM transcript_callbacks {where} ORDER BY created_at, callback_id"
+                f"SELECT callback_id, name, instructions, enabled, deliver FROM transcript_callbacks {where} ORDER BY created_at, callback_id"
             ).fetchall()
         return [_callback_from_row(row) for row in rows]
 
@@ -274,7 +287,7 @@ class TranscriptArchive:
         callback_id = _callback_id(callback_id)
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT callback_id, name, instructions, enabled FROM transcript_callbacks WHERE callback_id = ?",
+                "SELECT callback_id, name, instructions, enabled, deliver FROM transcript_callbacks WHERE callback_id = ?",
                 (callback_id,),
             ).fetchone()
         return _callback_from_row(row) if row else None
@@ -286,10 +299,12 @@ class TranscriptArchive:
         name: str,
         instructions: str,
         enabled: bool = True,
+        deliver: str | None = None,
     ) -> TranscriptCallback:
         callback_id = _callback_id(callback_id)
         name = _bounded_text(name, 160, "callback name")
         instructions = _bounded_text(instructions, 12000, "callback instructions")
+        deliver = _optional_bounded_text(deliver, 512, "callback delivery target")
         now = time.time()
         with self._connect() as conn:
             existing = conn.execute("SELECT created_at FROM transcript_callbacks WHERE callback_id = ?", (callback_id,)).fetchone()
@@ -297,12 +312,12 @@ class TranscriptArchive:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO transcript_callbacks (
-                    callback_id, name, instructions, enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    callback_id, name, instructions, enabled, deliver, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (callback_id, name, instructions, int(enabled), created_at, now),
+                (callback_id, name, instructions, int(enabled), deliver, created_at, now),
             )
-        return TranscriptCallback(callback_id, name, instructions, enabled)
+        return TranscriptCallback(callback_id, name, instructions, enabled, deliver)
 
     def set_callback_enabled(self, callback_id: str, enabled: bool) -> TranscriptCallback | None:
         callback_id = _callback_id(callback_id)
@@ -531,6 +546,7 @@ def _callback_from_row(row: sqlite3.Row) -> TranscriptCallback:
         name=str(row["name"]),
         instructions=str(row["instructions"]),
         enabled=bool(row["enabled"]),
+        deliver=str(row["deliver"]) if row["deliver"] is not None else None,
     )
 
 
@@ -546,6 +562,12 @@ def _bounded_text(value: str, maximum: int, label: str) -> str:
     if not cleaned or len(cleaned) > maximum:
         raise ValueError(f"{label} must contain 1-{maximum} characters")
     return cleaned
+
+
+def _optional_bounded_text(value: str | None, maximum: int, label: str) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return _bounded_text(value, maximum, label)
 
 
 def _restrict_permissions(path: Path, mode: int) -> None:

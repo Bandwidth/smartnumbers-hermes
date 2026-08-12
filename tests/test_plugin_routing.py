@@ -296,6 +296,111 @@ def test_auto_review_dispatches_one_shot_cron_job_when_instructions_exist(monkey
     }
 
 
+def test_callbacks_dispatch_as_independent_jobs_with_delivery_overrides(monkeypatch, tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.upsert_callback(
+        callback_id="calendar",
+        name="Calendar follow-up",
+        instructions="Add agreed events to my calendar.",
+        deliver="local",
+    )
+    archive.upsert_callback(
+        callback_id="summary",
+        name="Call summary",
+        instructions="Summarize the call for me.",
+    )
+    config = config_from_mapping(
+        {
+            "extract_to_memory": False,
+            "auto_review_deliver": "telegram",
+        }
+    )
+    ctx = FakeDispatchContext()
+    times = iter(["2026-06-25T16:12:03Z", "2026-06-25T16:12:04Z"])
+    monkeypatch.setattr(plugin, "_utc_now_iso", lambda: next(times))
+
+    ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert ack is not None and ack["success"] is True
+    assert len(ctx.calls) == 2
+    jobs = {args["name"]: args for _, args in ctx.calls}
+    calendar_job = jobs["Run Calendar follow-up for transcript conv_001"]
+    summary_job = jobs["Run Call summary for transcript conv_001"]
+    assert calendar_job["deliver"] == "local"
+    assert summary_job["deliver"] == "telegram"
+    assert calendar_job["schedule"] == summary_job["schedule"] == "2026-06-25T16:12:04Z"
+    assert "Add agreed events to my calendar." in calendar_job["prompt"]
+    assert "Summarize the call for me." not in calendar_job["prompt"]
+    assert "Summarize the call for me." in summary_job["prompt"]
+    assert "Add agreed events to my calendar." not in summary_job["prompt"]
+
+
+def test_callbacks_with_same_delivery_still_dispatch_as_independent_jobs(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.upsert_callback(callback_id="calendar", name="Calendar", instructions="Add agreed events.")
+    archive.upsert_callback(callback_id="tasks", name="Tasks", instructions="Create follow-up tasks.")
+    config = config_from_mapping({"extract_to_memory": False})
+    ctx = FakeDispatchContext()
+
+    ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert ack is not None and ack["success"] is True
+    assert len(ctx.calls) == 2
+    assert [args["deliver"] for _, args in ctx.calls] == ["local", "local"]
+    assert all('"id": "calendar"' in args["prompt"] or '"id": "tasks"' in args["prompt"] for _, args in ctx.calls)
+
+
+def test_callback_retry_only_redispatches_failed_job(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.upsert_callback(callback_id="calendar", name="Calendar", instructions="Add agreed events.")
+    archive.upsert_callback(callback_id="tasks", name="Tasks", instructions="Create follow-up tasks.")
+    config = config_from_mapping({"extract_to_memory": False})
+
+    class FailCalendarOnceContext(FakeDispatchContext):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def dispatch_tool(self, tool_name, args):  # noqa: ANN001
+            self.calls.append((tool_name, args))
+            if "Run Calendar" in args["name"] and not self.failed:
+                self.failed = True
+                raise RuntimeError("temporary calendar failure")
+            return json.dumps({"success": True, "job_id": f"job_{len(self.calls)}"})
+
+    ctx = FailCalendarOnceContext()
+
+    first_ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+    second_ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert first_ack is not None and first_ack["success"] is False
+    assert second_ack is not None and second_ack["success"] is True
+    names = [args["name"] for _, args in ctx.calls]
+    assert names.count("Run Calendar for transcript conv_001") == 2
+    assert names.count("Run Tasks for transcript conv_001") == 1
+
+
+def test_legacy_aggregate_callback_execution_prevents_replay(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.upsert_callback(callback_id="calendar", name="Calendar", instructions="Add agreed events.")
+    legacy_key = plugin._execution_key("callbacks", "conv_001", "calendar")
+    archive.claim_execution(
+        execution_key=legacy_key,
+        conversation_id="conv_001",
+        execution_kind="callbacks",
+        callback_id=None,
+        authorization_quote="Registered transcript callbacks",
+    )
+    archive.complete_execution(legacy_key, job_id="legacy_job")
+    config = config_from_mapping({"extract_to_memory": False})
+    ctx = FakeDispatchContext()
+
+    ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert ctx.calls == []
+    assert ack is not None and ack["stages"]["review"]["status"] == "skipped:duplicate"
+
+
 @pytest.mark.parametrize(
     ("raw_result", "expected_error"),
     [

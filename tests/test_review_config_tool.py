@@ -91,6 +91,7 @@ def test_register_requires_new_id_and_update_requires_existing_id(tmp_path):
         "name": "Calendar follow-up",
         "instructions": "Add only confirmed events.",
         "enabled": False,
+        "deliver": None,
     }
     assert archive.get_callback("missing") is None
 
@@ -115,3 +116,56 @@ def test_callback_mutations_normalize_ids_consistently(tmp_path):
     assert enabled["callbacks"][0]["enabled"] is True
     assert removed == {"success": True, "callbacks": []}
     assert archive.get_callback("my-calendar") is None
+
+
+def test_callback_delivery_override_can_be_preserved_and_cleared(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    handler = make_transcript_review_config_handler(archive)
+
+    registered = json.loads(
+        handler(
+            {
+                "action": "register",
+                "id": "calendar",
+                "name": "Calendar",
+                "instructions": "Add agreed events.",
+                "deliver": "telegram",
+            }
+        )
+    )
+    preserved = json.loads(
+        handler(
+            {
+                "action": "update",
+                "id": "calendar",
+                "name": "Calendar",
+                "instructions": "Add only confirmed events.",
+            }
+        )
+    )
+    cleared = json.loads(
+        handler(
+            {
+                "action": "update",
+                "id": "calendar",
+                "name": "Calendar",
+                "instructions": "Add only confirmed events.",
+                "deliver": "",
+            }
+        )
+    )
+
+    assert registered["callbacks"][0]["deliver"] == "telegram"
+    assert preserved["callbacks"][0]["deliver"] == "telegram"
+    assert cleared["callbacks"][0]["deliver"] is None
+
+
+def test_default_callback_set_preserves_delivery_override(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    handler = make_transcript_review_config_handler(archive)
+
+    handler({"action": "set", "instructions": "Review calls.", "deliver": "telegram"})
+    handler({"action": "set", "instructions": "Review calls carefully."})
+
+    callbacks = json.loads(handler({"action": "list"}))["callbacks"]
+    assert callbacks[0]["deliver"] == "telegram"

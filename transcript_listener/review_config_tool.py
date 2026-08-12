@@ -30,6 +30,14 @@ TRANSCRIPT_REVIEW_CONFIG_SCHEMA = {
             "id": {"type": "string", "description": "Callback identifier for register, update, enable, disable, or remove."},
             "name": {"type": "string", "description": "Human-readable callback name for register or update."},
             "enabled": {"type": "boolean", "description": "Optional enabled state for register or update."},
+            "deliver": {
+                "type": "string",
+                "description": (
+                    "Optional Hermes cron delivery target for set, register, or update, such as local or telegram. "
+                    "Omit it when registering to inherit the plugin default, or when updating to preserve the current value. "
+                    "Use an empty string during set or update to clear an override."
+                ),
+            },
             "authorization_token": {"type": "string", "description": "Required only for callback mutations from a scheduled transcript command."},
         },
         "required": ["action"],
@@ -52,7 +60,10 @@ def make_transcript_review_config_handler(archive: TranscriptArchive):
                 instructions = str(args.get("instructions") or "").strip()
                 if not instructions:
                     return _response(False, error="instructions is required when action is set")
-                archive.set_review_instructions(instructions)
+                if "deliver" in args:
+                    archive.set_review_instructions(instructions, deliver=_delivery_override(args))
+                else:
+                    archive.set_review_instructions(instructions)
                 return _response(True, instructions=instructions)
             if action == "clear":
                 archive.set_review_instructions("")
@@ -75,6 +86,11 @@ def make_transcript_review_config_handler(archive: TranscriptArchive):
                     name=name,
                     instructions=instructions,
                     enabled=bool(args.get("enabled", existing.enabled if existing else True)),
+                    deliver=(
+                        _delivery_override(args)
+                        if "deliver" in args
+                        else existing.deliver if existing else None
+                    ),
                 )
                 return _callbacks_response(True, [callback])
             if action in {"enable", "disable"}:
@@ -118,3 +134,10 @@ def _callbacks_response(success: bool, callbacks: list[Any] | None = None, *, er
     if error:
         payload["error"] = error
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _delivery_override(args: dict[str, Any]) -> str | None:
+    value = args.get("deliver")
+    if value is None:
+        return None
+    return str(value).strip() or None

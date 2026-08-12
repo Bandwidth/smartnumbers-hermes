@@ -97,8 +97,7 @@ When `archive_raw` is enabled, transcripts are stored at
 `$HERMES_HOME/transcript_listener/transcripts.db`. The plugin exposes:
 
 - `transcript_search` to search archived transcript turns.
-- `transcript_review_config` to show, set, or clear automatic review
-  instructions.
+- `transcript_review_config` to manage automatic post-call callbacks.
 
 When review instructions are present and `auto_review_transcripts` is enabled,
 the plugin asynchronously queues a one-shot Hermes cron task for each new
@@ -121,6 +120,13 @@ email, tasks, or other services. A callback is user-authorized natural-language
 instructions that Hermes evaluates after a new call, with the same configured
 cron tool access as the existing automatic review job.
 
+Each enabled callback runs as its own one-shot cron job in a fresh agent
+session. Jobs for the same transcript use the same scheduled timestamp, so
+current Hermes versions can run them concurrently. Keeping one goal per job
+also avoids requiring the model to separate or coordinate unrelated callback
+instructions. When multiple actions belong together, the user should put them in the same
+callback instructions.
+
 `transcript_review_config` retains its existing actions:
 
 - `show`, `set`, and `clear` manage the `default-review` callback.
@@ -128,9 +134,18 @@ cron tool access as the existing automatic review job.
 It also supports independent callbacks:
 
 - `list`
-- `register` with a new `id`, `name`, and `instructions`
-- `update` with an existing `id`, `name`, and `instructions`
+- `register` with a new `id`, `name`, and `instructions`, plus an optional
+  `deliver` target
+- `update` with an existing `id`, `name`, and `instructions`, plus an optional
+  `deliver` target
 - `enable`, `disable`, and `remove` with `id`
+
+The callback `deliver` value accepts the same targets as Hermes cron, including
+`local`, `telegram`, and explicit targets such as
+`telegram:-1001234567890:17585`. When it is omitted, the callback inherits
+`auto_review_deliver`; an empty `deliver` value on update clears an existing
+override. The `set` action also accepts `deliver` for the `default-review`
+callback.
 
 For example, Hermes can register an arbitrary callback after a normal user
 request:
@@ -159,7 +174,7 @@ Hermes extracts the verbatim command span without requiring it to consume the
 rest of the speaker turn. Multiple direct addresses in one turn are independent
 commands.
 
-Named command jobs and generic callback jobs keep `auto_review_toolsets` as-is.
+Named command jobs and individual callback jobs keep `auto_review_toolsets` as-is.
 When it is omitted, Hermes' cron default toolsets are preserved. Hermes' normal
 approval configuration, including `approvals.mode` and `approvals.cron_mode`,
 continues to control tool approvals.

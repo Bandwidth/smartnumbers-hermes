@@ -373,6 +373,23 @@ class TranscriptArchive:
                 (status, job_id, error, time.time(), execution_key),
             )
 
+    def list_execution_job_ids(self, conversation_id: str) -> list[str]:
+        """Return every cron job associated with a transcript in recorded order."""
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_id
+                FROM callback_executions
+                WHERE conversation_id = ? AND job_id IS NOT NULL
+                ORDER BY updated_at, created_at, execution_key
+                """,
+                (conversation_id,),
+            ).fetchall()
+        # Aggregate compatibility executions repeat the first callback job ID.
+        # Deduplicate without losing the order in which job IDs were recorded.
+        return list(dict.fromkeys(str(row["job_id"]) for row in rows if str(row["job_id"]).strip()))
+
     def create_callback_mutation_token(self, *, uses: int = 10, ttl_seconds: int = 900) -> str:
         token = secrets.token_urlsafe(32)
         now = time.time()

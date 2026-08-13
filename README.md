@@ -121,10 +121,11 @@ instructions that Hermes evaluates after a new call, with the same configured
 cron tool access as the existing automatic review job.
 
 Each enabled callback runs as its own one-shot cron job in a fresh agent
-session. Jobs for the same transcript use the same scheduled timestamp, so
-current Hermes versions can run them concurrently. Keeping one goal per job
-also avoids requiring the model to separate or coordinate unrelated callback
-instructions. When multiple actions belong together, the user should put them in the same
+session. Each job is scheduled immediately before it is dispatched, keeping it
+as close as possible to transcript processing time while allowing the scheduler
+to run independent callbacks concurrently. Keeping one goal per job also avoids
+requiring the model to separate or coordinate unrelated callback instructions.
+When multiple actions belong together, the user should put them in the same
 callback instructions.
 
 `transcript_review_config` retains its existing actions:
@@ -140,12 +141,28 @@ It also supports independent callbacks:
   `deliver` target
 - `enable`, `disable`, and `remove` with `id`
 
-The callback `deliver` value accepts the same targets as Hermes cron, including
-`local`, `telegram`, and explicit targets such as
+The callback `deliver` value accepts `local`, `all`, or a configured gateway
+platform such as `telegram`, including explicit targets such as
 `telegram:-1001234567890:17585`. When it is omitted, the callback inherits
 `auto_review_deliver`; an empty `deliver` value on update clears an existing
 override. The `set` action also accepts `deliver` for the `default-review`
-callback.
+callback. Explicit overrides are validated when the callback is created or
+updated against the live Hermes gateway configuration. Any built-in or plugin
+platform is accepted when it is configured, enabled, and connected; an
+unconfigured platform is rejected even if Hermes has built-in support for it.
+Platform-only routes also require a configured home delivery location, while
+an explicit `platform:destination` route only requires the platform itself to
+be configured. `local` and `all` are always valid routing values, but neither
+accepts an explicit destination. `origin` is not supported for transcript
+callbacks because jobs are created by the background plugin rather than an
+originating gateway conversation. An invalid route returns an error without
+saving the callback change.
+
+The transcript acknowledgement retains the backward-compatible review
+`job_id` field and also returns `job_ids`, containing every independently
+queued callback and named-command job associated with the transcript. Duplicate
+events and partial-failure retries return the complete known list rather than
+only the jobs created by the latest attempt.
 
 For example, Hermes can register an arbitrary callback after a normal user
 request:

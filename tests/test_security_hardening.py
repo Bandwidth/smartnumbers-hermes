@@ -91,6 +91,7 @@ def test_callback_registry_has_no_revision_concept(tmp_path):
         "name": "Calendar",
         "instructions": "Add agreed events.",
         "enabled": True,
+        "deliver": None,
     }
     with archive._connect() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(transcript_callbacks)")}

@@ -89,3 +89,75 @@ def test_archive_migrates_existing_db_for_event_received_at(tmp_path):
 
     assert {"event_received_at", "review_requested_at", "review_job_id", "review_status", "review_error"} <= columns
     assert row["event_received_at"] == "2026-06-25T18:00:00Z"
+
+
+def test_archive_migrates_existing_callbacks_for_delivery_override(tmp_path):
+    db_path = tmp_path / "transcripts.db"
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE transcript_callbacks (
+                callback_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                instructions TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO transcript_callbacks (
+                callback_id, name, instructions, enabled, created_at, updated_at
+            ) VALUES ('calendar', 'Calendar', 'Add agreed events.', 1, 1, 1)
+            """
+        )
+
+    archive = TranscriptArchive(db_path)
+    existing = archive.get_callback("calendar")
+    updated = archive.upsert_callback(
+        callback_id="calendar",
+        name="Calendar",
+        instructions="Add agreed events.",
+        deliver="telegram",
+    )
+
+    with sqlite3.connect(str(db_path)) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(transcript_callbacks)")}
+
+    assert "deliver" in columns
+    assert existing is not None and existing.deliver is None
+    assert updated.deliver == "telegram"
+    assert TranscriptArchive(db_path).get_callback("calendar").deliver == "telegram"
+
+
+def test_archive_lists_all_execution_job_ids_without_aggregate_duplicates(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    base = {
+        "conversation_id": "call-1",
+        "authorization_quote": "registered callback",
+    }
+    archive.claim_execution(
+        **base,
+        execution_key="aggregate",
+        execution_kind="callbacks",
+        callback_id=None,
+    )
+    archive.claim_execution(
+        **base,
+        execution_key="calendar",
+        execution_kind="callback",
+        callback_id="calendar",
+    )
+    archive.complete_execution("calendar", job_id="job-1")
+    archive.claim_execution(
+        **base,
+        execution_key="summary",
+        execution_kind="callback",
+        callback_id="summary",
+    )
+    archive.complete_execution("summary", job_id="job-2")
+    archive.complete_execution("aggregate", job_id="job-1")
+
+    assert archive.list_execution_job_ids("call-1") == ["job-1", "job-2"]

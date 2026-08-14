@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from typing import Any
 
-from .storage import TranscriptArchive
+from .storage import DEFAULT_CALLBACK_ID, TranscriptArchive
+
+
+_DELIVERY_ROUTING_TOKENS = frozenset({"all", "local"})
+
+
+@dataclass(frozen=True)
+class _DeliveryLocations:
+    platforms: frozenset[str]
+    platforms_with_home: frozenset[str]
 
 
 TRANSCRIPT_REVIEW_CONFIG_SCHEMA = {
@@ -30,6 +40,14 @@ TRANSCRIPT_REVIEW_CONFIG_SCHEMA = {
             "id": {"type": "string", "description": "Callback identifier for register, update, enable, disable, or remove."},
             "name": {"type": "string", "description": "Human-readable callback name for register or update."},
             "enabled": {"type": "boolean", "description": "Optional enabled state for register or update."},
+            "deliver": {
+                "type": "string",
+                "description": (
+                    "Optional Hermes cron delivery target for set, register, or update, such as local or telegram. "
+                    "Omit it when registering to inherit the plugin default, or when updating to preserve the current value. "
+                    "Use an empty string during set or update to clear an override."
+                ),
+            },
             "authorization_token": {"type": "string", "description": "Required only for callback mutations from a scheduled transcript command."},
         },
         "required": ["action"],
@@ -37,7 +55,7 @@ TRANSCRIPT_REVIEW_CONFIG_SCHEMA = {
 }
 
 
-def make_transcript_review_config_handler(archive: TranscriptArchive):
+def make_transcript_review_config_handler(archive: TranscriptArchive, *, default_deliver: str = "local"):
     def transcript_review_config(args: dict[str, Any], **kwargs: Any) -> str:
         del kwargs
         try:
@@ -52,7 +70,16 @@ def make_transcript_review_config_handler(archive: TranscriptArchive):
                 instructions = str(args.get("instructions") or "").strip()
                 if not instructions:
                     return _response(False, error="instructions is required when action is set")
-                archive.set_review_instructions(instructions)
+                if "deliver" in args:
+                    deliver = _delivery_override(args)
+                    validate_callback_delivery_target(deliver or default_deliver or "local")
+                    archive.set_review_instructions(instructions, deliver=deliver)
+                else:
+                    existing = archive.get_callback(DEFAULT_CALLBACK_ID)
+                    validate_callback_delivery_target(
+                        (existing.deliver if existing else None) or default_deliver or "local"
+                    )
+                    archive.set_review_instructions(instructions)
                 return _response(True, instructions=instructions)
             if action == "clear":
                 archive.set_review_instructions("")
@@ -70,11 +97,18 @@ def make_transcript_review_config_handler(archive: TranscriptArchive):
                     return _callbacks_response(False, error="callback already exists")
                 if action == "update" and existing is None:
                     return _callbacks_response(False, error="callback was not found")
+                deliver = (
+                    _delivery_override(args)
+                    if "deliver" in args
+                    else existing.deliver if existing else None
+                )
+                validate_callback_delivery_target(deliver or default_deliver or "local")
                 callback = archive.upsert_callback(
                     callback_id=callback_id,
                     name=name,
                     instructions=instructions,
                     enabled=bool(args.get("enabled", existing.enabled if existing else True)),
+                    deliver=deliver,
                 )
                 return _callbacks_response(True, [callback])
             if action in {"enable", "disable"}:
@@ -118,3 +152,101 @@ def _callbacks_response(success: bool, callbacks: list[Any] | None = None, *, er
     if error:
         payload["error"] = error
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _delivery_override(args: dict[str, Any]) -> str | None:
+    value = args.get("deliver")
+    if not isinstance(value, str):
+        raise ValueError("callback delivery target must be a string")
+    return validate_callback_delivery_target(value)
+
+
+def validate_callback_delivery_target(value: str) -> str | None:
+    """Normalize and validate one Hermes cron delivery route."""
+
+    text = value.strip()
+    if not text:
+        return None
+
+    configured_locations = _configured_delivery_locations()
+    return ",".join(
+        _validate_delivery_destination(destination, configured_locations)
+        for destination in text.split(",")
+    )
+
+
+def _validate_delivery_destination(
+    destination: str,
+    configured_locations: _DeliveryLocations | None,
+) -> str:
+    platform, target = _parse_delivery_destination(destination)
+    if platform in _DELIVERY_ROUTING_TOKENS:
+        if target is not None:
+            raise ValueError(f"callback delivery target {platform!r} does not accept a destination ID")
+        return platform
+
+    _validate_platform_destination(platform, target, configured_locations)
+    return f"{platform}:{target}" if target is not None else platform
+
+
+def _parse_delivery_destination(destination: str) -> tuple[str, str | None]:
+    destination = destination.strip()
+    if not destination:
+        raise ValueError("callback delivery target contains an empty destination")
+    if ":" not in destination:
+        return destination.lower(), None
+
+    platform, target = destination.split(":", 1)
+    platform = platform.strip().lower()
+    target = target.strip()
+    if not platform:
+        raise ValueError("explicit callback delivery targets require a platform")
+    if not target:
+        raise ValueError("explicit callback delivery targets require a destination ID")
+    return platform, target
+
+
+def _validate_platform_destination(
+    platform: str,
+    target: str | None,
+    configured_locations: _DeliveryLocations | None,
+) -> None:
+    # Outside Hermes there is no gateway configuration to inspect. Syntax is
+    # still normalized and checked; runtime configuration remains authoritative.
+    if configured_locations is None:
+        return
+
+    if platform not in configured_locations.platforms:
+        configured = ", ".join(sorted(configured_locations.platforms)) or "none"
+        raise ValueError(
+            f"callback delivery platform {platform!r} is not configured and enabled; "
+            f"configured platforms: {configured}"
+        )
+    if target is None and platform not in configured_locations.platforms_with_home:
+        raise ValueError(
+            f"callback delivery platform {platform!r} has no configured home delivery location; "
+            f"use an explicit {platform}:destination target or configure its home location"
+        )
+
+
+def _configured_delivery_locations() -> _DeliveryLocations | None:
+    """Return connected platforms and those with cron home destinations."""
+
+    try:
+        from hermes_cli.plugins import discover_plugins
+        from cron.scheduler import _get_home_target_chat_id
+        from gateway.config import load_gateway_config
+    except (ImportError, ModuleNotFoundError):
+        # The plugin remains importable and testable outside a Hermes runtime.
+        return None
+    try:
+        discover_plugins()
+        configured = frozenset(
+            platform.value
+            for platform in load_gateway_config().get_connected_platforms()
+            if platform.value != "local"
+        )
+        with_home = frozenset(platform for platform in configured if _get_home_target_chat_id(platform))
+        return _DeliveryLocations(configured, with_home)
+    except Exception as exc:
+        raise RuntimeError(f"unable to validate callback delivery locations: {exc}") from exc

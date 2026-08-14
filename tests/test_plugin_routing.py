@@ -50,6 +50,12 @@ class FakeDispatchResultContext(FakeDispatchContext):
         return self.result
 
 
+class UniqueJobDispatchContext(FakeDispatchContext):
+    def dispatch_tool(self, tool_name, args):  # noqa: ANN001
+        self.calls.append((tool_name, args))
+        return json.dumps({"success": True, "job_id": f"job_{len(self.calls)}"})
+
+
 class InjectionTrackingContext:
     def __init__(self):
         self.inject_calls = 0
@@ -250,6 +256,7 @@ def test_auto_review_skips_when_instructions_are_blank(tmp_path):
         "success": False,
         "status": "skipped:no_instructions",
         "job_id": None,
+        "job_ids": [],
     }
     assert archive.get_review_state("conv_001")["review_status"] == "skipped:no_instructions"
 
@@ -265,7 +272,7 @@ def test_auto_review_dispatches_one_shot_cron_job_when_instructions_exist(monkey
         }
     )
     ctx = FakeDispatchContext()
-    times = iter(["2026-06-25T16:12:03Z", "2026-06-25T16:12:04Z"])
+    times = iter(["2026-06-25T16:12:03Z", "2026-06-25T16:12:04Z", "2026-06-25T16:12:05Z"])
     monkeypatch.setattr(plugin, "_utc_now_iso", lambda: next(times))
 
     ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
@@ -274,7 +281,7 @@ def test_auto_review_dispatches_one_shot_cron_job_when_instructions_exist(monkey
     tool_name, args = ctx.calls[0]
     assert tool_name == "cronjob"
     assert args["action"] == "create"
-    assert args["schedule"] == "2026-06-25T16:12:04Z"
+    assert args["schedule"] == "2026-06-25T16:12:05Z"
     assert args["deliver"] == "telegram"
     assert args["enabled_toolsets"] == ["smartnumbers", "memory", "todo"]
     assert "Conversation ID: conv_001" in args["prompt"]
@@ -287,6 +294,7 @@ def test_auto_review_dispatches_one_shot_cron_job_when_instructions_exist(monkey
         "success": True,
         "status": "queued",
         "job_id": "job_123",
+        "job_ids": ["job_123"],
     }
     assert archive.get_review_state("conv_001") == {
         "review_requested_at": "2026-06-25T16:12:04Z",
@@ -294,6 +302,125 @@ def test_auto_review_dispatches_one_shot_cron_job_when_instructions_exist(monkey
         "review_status": "queued",
         "review_error": None,
     }
+
+
+def test_callbacks_dispatch_as_independent_jobs_with_delivery_overrides(monkeypatch, tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.upsert_callback(
+        callback_id="calendar",
+        name="Calendar follow-up",
+        instructions="Add agreed events to my calendar.",
+        deliver="local",
+    )
+    archive.upsert_callback(
+        callback_id="summary",
+        name="Call summary",
+        instructions="Summarize the call for me.",
+    )
+    config = config_from_mapping(
+        {
+            "extract_to_memory": False,
+            "auto_review_deliver": "telegram",
+        }
+    )
+    ctx = UniqueJobDispatchContext()
+    times = iter(
+        [
+            "2026-06-25T16:12:03Z",
+            "2026-06-25T16:12:04Z",
+            "2026-06-25T16:12:05Z",
+            "2026-06-25T16:12:06Z",
+        ]
+    )
+    monkeypatch.setattr(plugin, "_utc_now_iso", lambda: next(times))
+
+    ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert ack is not None and ack["success"] is True
+    assert len(ctx.calls) == 2
+    jobs = {args["name"]: args for _, args in ctx.calls}
+    calendar_job = jobs["Run Calendar follow-up for transcript conv_001"]
+    summary_job = jobs["Run Call summary for transcript conv_001"]
+    assert calendar_job["deliver"] == "local"
+    assert summary_job["deliver"] == "telegram"
+    assert calendar_job["schedule"] == "2026-06-25T16:12:05Z"
+    assert summary_job["schedule"] == "2026-06-25T16:12:06Z"
+    assert "Add agreed events to my calendar." in calendar_job["prompt"]
+    assert "Summarize the call for me." not in calendar_job["prompt"]
+    assert "Summarize the call for me." in summary_job["prompt"]
+    assert "Add agreed events to my calendar." not in summary_job["prompt"]
+    assert ack["stages"]["review"]["job_id"] == "job_1"
+    assert ack["stages"]["review"]["job_ids"] == ["job_1", "job_2"]
+
+
+def test_callbacks_with_same_delivery_still_dispatch_as_independent_jobs(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.upsert_callback(callback_id="calendar", name="Calendar", instructions="Add agreed events.")
+    archive.upsert_callback(callback_id="tasks", name="Tasks", instructions="Create follow-up tasks.")
+    config = config_from_mapping({"extract_to_memory": False})
+    ctx = FakeDispatchContext()
+
+    ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert ack is not None and ack["success"] is True
+    assert len(ctx.calls) == 2
+    assert [args["deliver"] for _, args in ctx.calls] == ["local", "local"]
+    assert all('"id": "calendar"' in args["prompt"] or '"id": "tasks"' in args["prompt"] for _, args in ctx.calls)
+
+
+def test_callback_retry_only_redispatches_failed_job(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.upsert_callback(callback_id="calendar", name="Calendar", instructions="Add agreed events.")
+    archive.upsert_callback(callback_id="tasks", name="Tasks", instructions="Create follow-up tasks.")
+    config = config_from_mapping({"extract_to_memory": False})
+
+    class FailCalendarOnceContext(FakeDispatchContext):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def dispatch_tool(self, tool_name, args):  # noqa: ANN001
+            self.calls.append((tool_name, args))
+            if "Run Calendar" in args["name"] and not self.failed:
+                self.failed = True
+                raise RuntimeError()
+            return json.dumps({"success": True, "job_id": f"job_{len(self.calls)}"})
+
+    ctx = FailCalendarOnceContext()
+
+    first_ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+    second_ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert first_ack is not None and first_ack["success"] is False
+    assert second_ack is not None and second_ack["success"] is True
+    assert first_ack["stages"]["review"]["error"] == "RuntimeError"
+    assert first_ack["stages"]["review"]["job_ids"] == ["job_2"]
+    assert second_ack["stages"]["review"]["job_ids"] == ["job_2", "job_3"]
+    names = [args["name"] for _, args in ctx.calls]
+    assert names.count("Run Calendar for transcript conv_001") == 2
+    assert names.count("Run Tasks for transcript conv_001") == 1
+
+
+def test_legacy_aggregate_callback_execution_prevents_replay(tmp_path):
+    archive = TranscriptArchive(tmp_path / "transcripts.db")
+    archive.upsert_callback(callback_id="calendar", name="Calendar", instructions="Add agreed events.")
+    legacy_key = plugin._execution_key("callbacks", "conv_001", "calendar")
+    archive.claim_execution(
+        execution_key=legacy_key,
+        conversation_id="conv_001",
+        execution_kind="callbacks",
+        callback_id=None,
+        authorization_quote="Registered transcript callbacks",
+    )
+    archive.complete_execution(legacy_key, job_id="legacy_job")
+    config = config_from_mapping({"extract_to_memory": False})
+    ctx = FakeDispatchContext()
+
+    ack = plugin._handle_websocket_message(ctx, archive, config, FIXTURE.read_text())
+
+    assert ctx.calls == []
+    assert ack is not None and ack["stages"]["review"]["status"] == "skipped:duplicate"
+    assert ack["stages"]["review"]["job_ids"] == ["legacy_job"]
 
 
 @pytest.mark.parametrize(
@@ -320,6 +447,7 @@ def test_auto_review_rejects_unconfirmed_cron_creation(raw_result, expected_erro
         "success": False,
         "status": "error",
         "job_id": None,
+        "job_ids": [],
         "error": expected_error,
     }
     assert ack["errors"] == [{"stage": "review", "message": expected_error}]
@@ -350,6 +478,7 @@ def test_failed_cron_creation_can_be_retried(tmp_path):
         "success": True,
         "status": "queued",
         "job_id": "job_retry",
+        "job_ids": ["job_retry"],
     }
     assert len(ctx.calls) == 2
 
@@ -388,6 +517,7 @@ def test_auto_review_suppresses_duplicate_dispatch_after_callback_update(tmp_pat
         "success": True,
         "status": "skipped:duplicate",
         "job_id": "job_123",
+        "job_ids": ["job_123"],
     }
 
 

@@ -87,11 +87,11 @@ plugins:
 ```
 
 Advanced overrides are optional: `activation_names` adds STT aliases;
-`user_speaker_by_direction` changes the default inbound `TO` and outbound
-`FROM` authority mapping; `trust_event_direction` accepts authenticated provider
-direction metadata; `auto_review_toolsets` restricts post-call tool access; and
-`allowed_transcript_hosts` pins production transcript storage hosts. Setup saves
-the approved stream host automatically.
+`auto_review_toolsets` restricts post-call tool access; and
+`allowed_transcript_hosts` pins production transcript storage hosts. Connection
+Server call metadata is trusted: `metadata.direction` determines the authoritative
+speaker (`inbound` is `TO`, `outbound` is `FROM`), with inbound as the fallback.
+Setup saves the approved stream host automatically.
 
 When `archive_raw` is enabled, transcripts are stored at
 `$HERMES_HOME/transcript_listener/transcripts.db`. The plugin exposes:
@@ -173,7 +173,7 @@ Whenever I agree to attend an event on a call, add it to my calendar.
 
 ### Named Call Commands
 
-The configured user speaker can issue a one-time arbitrary Hermes command at
+The authoritative user speaker can issue a one-time arbitrary Hermes command at
 any point in a turn by directly addressing Hermes with its active branding name
 or its first word. If the branding name is `Ares Agent`, both forms are
 accepted:
@@ -185,8 +185,8 @@ TO: Friday sounds good. Ares, add that to my calendar. What time should I arrive
 ```
 
 Commands from the other party and incidental mentions of the name do not
-authorize work. The local direction mapping determines the authoritative
-speaker; a payload cannot select it. Current inbound calls use `TO` by default.
+authorize work. Connection Server direction selects the authoritative speaker.
+A payload `user_speaker` field cannot select authority.
 Hermes extracts the verbatim command span without requiring it to consume the
 rest of the speaker turn. Multiple direct addresses in one turn are independent
 commands.
@@ -204,21 +204,23 @@ participant from silently modifying future callback behavior.
 
 Transcript turns are external call data. They can provide dates, contacts,
 locations, and context, but they do not independently authorize Hermes actions.
-Only a named command from the configured user speaker or an already registered
+Only a named command from the authoritative user speaker or an already registered
 callback creates an action goal. When a user intentionally grants a generic
 callback broad Hermes tool access, its instructions should be reviewed as
 carefully as any other autonomous Hermes automation.
 
-Durable-fact extraction accepts facts stated directly by the configured user
+Durable-fact extraction accepts facts stated directly by the authoritative user
 speaker. A fact stated by another participant is eligible only when a later
-turn from the configured user speaker clearly agrees with or verifies it. Each
+turn from the authoritative user speaker clearly agrees with or verifies it. Each
 fact must cite the numbered assertion turn and exact source text; caller facts
 must also cite the later user-confirmation turn. Unconfirmed caller statements
 remain available through transcript search but are not written to memory.
 
 `transcript_search` returns `source_trust: "external-untrusted"` and supports
 pagination through `offset` and `next_offset` so long calls can be retrieved
-without silently truncating the result set.
+without silently truncating the result set. Results include call `direction`,
+`from`, and `to` metadata; searches can filter those fields directly or match
+phone numbers through the general `query` parameter.
 
 Downloaded transcript size is not capped by default. Complete transcripts are
 archived, and durable-fact extraction evaluates the complete finished transcript
@@ -268,7 +270,11 @@ Smartnumbers sends a presigned transcript URL:
   "event_id": "evt_123",
   "conversation_id": "call_123",
   "source": "bandwidth-call-recording",
-  "user_speaker": "TO",
+  "metadata": {
+    "direction": "inbound",
+    "from": "+18636389992",
+    "to": "+18633307564"
+  },
   "url": "https://presigned-s3-url...",
   "expires_at": "2026-06-02T18:00:00Z"
 }

@@ -53,12 +53,22 @@ def test_parse_accepts_mapping_and_json():
 def test_parse_accepts_markdown_transcript_with_metadata():
     transcript = parse_transcript_payload(
         MARKDOWN_TRANSCRIPT,
-        metadata={"conversation_id": "call_123", "source": "bandwidth-call-recording", "user_speaker": "TO"},
+        metadata={
+            "conversation_id": "call_123",
+            "source": "bandwidth-call-recording",
+            "user_speaker": "TO",
+            "direction": "inbound",
+            "from": "+18636389992",
+            "to": "+18633307564",
+        },
     )
 
     assert transcript.conversation_id == "call_123"
     assert transcript.source == "bandwidth-call-recording"
     assert transcript.user_speaker == "TO"
+    assert transcript.direction == "inbound"
+    assert transcript.from_number == "+18636389992"
+    assert transcript.to_number == "+18633307564"
     assert transcript.participants == {}
     assert len(transcript.turns) == 3
     assert transcript.turns[0].speaker == "TO"
@@ -76,3 +86,30 @@ def test_parse_markdown_generates_stable_conversation_id_when_missing():
     assert first.conversation_id == second.conversation_id
     assert first.source == "external-transcript"
     assert first.user_speaker == "TO"
+    assert first.direction == "inbound"
+
+
+def test_parse_invalid_direction_defaults_to_inbound():
+    transcript = parse_transcript_payload(
+        {
+            "conversation_id": "call_direction",
+            "direction": "sideways",
+            "turns": [{"speaker": "TO", "text": "hello"}],
+        }
+    )
+
+    assert transcript.direction == "inbound"
+
+
+def test_parse_derives_user_speaker_from_outbound_direction():
+    transcript = parse_transcript_payload(
+        {
+            "conversation_id": "call_outbound",
+            "direction": "outbound",
+            "user_speaker": "TO",
+            "turns": [{"speaker": "FROM", "text": "hello"}],
+        }
+    )
+
+    assert transcript.direction == "outbound"
+    assert transcript.user_speaker == "FROM"

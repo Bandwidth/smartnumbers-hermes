@@ -25,11 +25,6 @@ def test_config_uses_public_production_urls_by_default():
     assert DEFAULT_WEBSOCKET_URL == "wss://connections.smartnumbers.labs.bandwidth.com/ws/hermes"
 
 
-def test_config_reads_user_speaker_with_default():
-    assert config_from_mapping({}).user_speaker == "TO"
-    assert config_from_mapping({"user_speaker": "FROM"}).user_speaker == "FROM"
-
-
 def test_config_reads_auto_review_options():
     config = config_from_mapping(
         {

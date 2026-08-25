@@ -29,6 +29,9 @@ class TranscriptSearchResult:
     speaker_label: str
     text: str
     source: str
+    direction: str | None
+    from_number: str | None
+    to_number: str | None
     state_session_id: str | None
     event_received_at: str | None
 
@@ -40,6 +43,9 @@ class TranscriptSearchResult:
             "speaker_label": self.speaker_label,
             "text": self.text,
             "source": self.source,
+            "direction": self.direction,
+            "from": self.from_number,
+            "to": self.to_number,
             "state_session_id": self.state_session_id,
             "event_received_at": self.event_received_at,
         }
@@ -91,6 +97,9 @@ class TranscriptArchive:
                 CREATE TABLE IF NOT EXISTS transcripts (
                     conversation_id TEXT PRIMARY KEY,
                     source TEXT NOT NULL,
+                    direction TEXT,
+                    from_number TEXT,
+                    to_number TEXT,
                     participants_json TEXT NOT NULL,
                     raw_json TEXT NOT NULL,
                     rendered_text TEXT NOT NULL,
@@ -157,6 +166,9 @@ class TranscriptArchive:
             )
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(transcripts)")}
             for column in (
+                "direction",
+                "from_number",
+                "to_number",
                 "event_received_at",
                 "review_requested_at",
                 "review_job_id",
@@ -199,15 +211,19 @@ class TranscriptArchive:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO transcripts (
-                    conversation_id, source, participants_json, raw_json, rendered_text,
+                    conversation_id, source, direction, from_number, to_number,
+                    participants_json, raw_json, rendered_text,
                     state_session_id, event_received_at, review_requested_at, review_job_id,
                     review_status, review_error, created_at, updated_at, extraction_status,
                     extraction_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     transcript.conversation_id,
                     transcript.source,
+                    transcript.direction,
+                    transcript.from_number,
+                    transcript.to_number,
                     participants_json,
                     raw_json,
                     rendered,
@@ -464,6 +480,9 @@ class TranscriptArchive:
         query: str = "",
         external_session_id: str = "",
         speaker: str = "",
+        direction: str = "",
+        from_number: str = "",
+        to_number: str = "",
         since: str = "",
         until: str = "",
         limit: int = 10,
@@ -473,15 +492,28 @@ class TranscriptArchive:
         where: list[str] = []
         params: list[Any] = []
         if query.strip():
-            where.append("(LOWER(t.text) LIKE LOWER(?) OR LOWER(t.speaker_label) LIKE LOWER(?))")
+            where.append(
+                "(LOWER(t.text) LIKE LOWER(?) OR LOWER(t.speaker_label) LIKE LOWER(?) "
+                "OR LOWER(tr.direction) LIKE LOWER(?) OR LOWER(tr.from_number) LIKE LOWER(?) "
+                "OR LOWER(tr.to_number) LIKE LOWER(?))"
+            )
             needle = f"%{query.strip()}%"
-            params.extend([needle, needle])
+            params.extend([needle] * 5)
         if external_session_id.strip():
             where.append("t.conversation_id = ?")
             params.append(external_session_id.strip())
         if speaker.strip():
             where.append("(t.speaker = ? OR t.speaker_label = ?)")
             params.extend([speaker.strip(), speaker.strip()])
+        if direction.strip():
+            where.append("tr.direction = ?")
+            params.append(direction.strip())
+        if from_number.strip():
+            where.append("tr.from_number = ?")
+            params.append(from_number.strip())
+        if to_number.strip():
+            where.append("tr.to_number = ?")
+            params.append(to_number.strip())
         if since.strip():
             where.append("tr.event_received_at IS NOT NULL AND tr.event_received_at >= ?")
             params.append(since.strip())
@@ -491,7 +523,8 @@ class TranscriptArchive:
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         sql = f"""
             SELECT t.conversation_id, t.timestamp, t.speaker, t.speaker_label,
-                   t.text, t.source, tr.state_session_id, tr.event_received_at
+                   t.text, t.source, tr.direction, tr.from_number, tr.to_number,
+                   tr.state_session_id, tr.event_received_at
             FROM turns t
             JOIN transcripts tr ON tr.conversation_id = t.conversation_id
             {where_sql}
@@ -510,6 +543,9 @@ class TranscriptArchive:
                 speaker_label=row["speaker_label"],
                 text=row["text"],
                 source=row["source"],
+                direction=row["direction"],
+                from_number=row["from_number"],
+                to_number=row["to_number"],
                 state_session_id=row["state_session_id"],
                 event_received_at=row["event_received_at"],
             )
@@ -523,20 +559,36 @@ class TranscriptArchive:
         query = str(kwargs.get("query") or "")
         external_session_id = str(kwargs.get("external_session_id") or "")
         speaker = str(kwargs.get("speaker") or "")
+        direction = str(kwargs.get("direction") or "")
+        from_number = str(kwargs.get("from_number") or "")
+        to_number = str(kwargs.get("to_number") or "")
         since = str(kwargs.get("since") or "")
         until = str(kwargs.get("until") or "")
         where: list[str] = []
         params: list[Any] = []
         if query.strip():
-            where.append("(LOWER(t.text) LIKE LOWER(?) OR LOWER(t.speaker_label) LIKE LOWER(?))")
+            where.append(
+                "(LOWER(t.text) LIKE LOWER(?) OR LOWER(t.speaker_label) LIKE LOWER(?) "
+                "OR LOWER(tr.direction) LIKE LOWER(?) OR LOWER(tr.from_number) LIKE LOWER(?) "
+                "OR LOWER(tr.to_number) LIKE LOWER(?))"
+            )
             needle = f"%{query.strip()}%"
-            params.extend([needle, needle])
+            params.extend([needle] * 5)
         if external_session_id.strip():
             where.append("t.conversation_id = ?")
             params.append(external_session_id.strip())
         if speaker.strip():
             where.append("(t.speaker = ? OR t.speaker_label = ?)")
             params.extend([speaker.strip(), speaker.strip()])
+        if direction.strip():
+            where.append("tr.direction = ?")
+            params.append(direction.strip())
+        if from_number.strip():
+            where.append("tr.from_number = ?")
+            params.append(from_number.strip())
+        if to_number.strip():
+            where.append("tr.to_number = ?")
+            params.append(to_number.strip())
         if since.strip():
             where.append("tr.event_received_at IS NOT NULL AND tr.event_received_at >= ?")
             params.append(since.strip())

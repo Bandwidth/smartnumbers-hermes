@@ -46,8 +46,8 @@ EXTRACTION_INSTRUCTIONS = (
     "Use target='memory' for project context, environment facts, workflows, and recurring task context. "
     "Keep each fact concise, directly supported by transcript text, and useful in future assistance. "
     "Set assertion_turn_index to the numbered turn containing the fact and copy source verbatim from that turn. "
-    "If the configured user speaker states the fact, set confirmation_turn_index to the same turn. "
-    "If another speaker states it, emit the fact only when a later numbered turn from the configured user speaker "
+    "If the authoritative user speaker states the fact, set confirmation_turn_index to the same turn. "
+    "If another speaker states it, emit the fact only when a later numbered turn from the authoritative user speaker "
     "clearly agrees with or verifies the same proposition, and set confirmation_turn_index to that later turn. "
     "Do not treat silence, mere acknowledgement, uncertainty, or unrelated agreement as confirmation."
 )

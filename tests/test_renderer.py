@@ -35,10 +35,29 @@ def test_render_for_llm_marks_transcript_text_untrusted():
 
 
 def test_render_for_sessiondb_includes_provenance():
-    transcript = parse_transcript_payload(FIXTURE.read_text())
+    transcript = parse_transcript_payload(
+        FIXTURE.read_text(),
+        metadata={"direction": "inbound", "from": "+18636389992", "to": "+18633307564"},
+    )
     rendered = render_for_sessiondb(transcript)
 
     assert "[External transcript]" in rendered
     assert "Conversation: conv_001" in rendered
     assert "Source: test-fixture" in rendered
     assert "User speaker: TO" in rendered
+    assert "Direction: inbound" in rendered
+    assert "From phone number: +18636389992" in rendered
+    assert "To phone number: +18633307564" in rendered
+
+
+def test_render_for_llm_includes_call_metadata():
+    transcript = parse_transcript_payload(
+        FIXTURE.read_text(),
+        metadata={"direction": "outbound", "from": "+18633307564", "to": "+18636389992"},
+    )
+
+    rendered = render_for_llm(transcript)
+
+    assert "Direction: outbound" in rendered
+    assert "From phone number: +18633307564" in rendered
+    assert "To phone number: +18636389992" in rendered

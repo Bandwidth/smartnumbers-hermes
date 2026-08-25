@@ -216,6 +216,16 @@ fact must cite the numbered assertion turn and exact source text; caller facts
 must also cite the later user-confirmation turn. Unconfirmed caller statements
 remain available through transcript search but are not written to memory.
 
+### Phone Number Handling
+
+The plugin treats `metadata.from` and `metadata.to` from the authenticated
+Connection Server stream as call metadata. When present, it stores and returns
+the full values unchanged; the plugin does not mask or hash phone numbers.
+Hermes may apply its own security or privacy masking when tool results or
+context are shown to a model or user, but that happens outside the plugin and
+does not modify the local archive. Legacy transcripts that were stored before
+this metadata was available retain `NULL` values rather than inferred numbers.
+
 `transcript_search` returns `source_trust: "external-untrusted"` and supports
 pagination through `offset` and `next_offset` so long calls can be retrieved
 without silently truncating the result set. Results include call `direction`,

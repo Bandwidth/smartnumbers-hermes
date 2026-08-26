@@ -498,6 +498,7 @@ class TranscriptArchive:
                 "OR LOWER(tr.to_number) LIKE LOWER(?))"
             )
             needle = f"%{query.strip()}%"
+            # SQLite needs one copy of the search pattern for each LIKE placeholder.
             params.extend([needle] * 5)
         if external_session_id.strip():
             where.append("t.conversation_id = ?")
@@ -573,6 +574,7 @@ class TranscriptArchive:
                 "OR LOWER(tr.to_number) LIKE LOWER(?))"
             )
             needle = f"%{query.strip()}%"
+            # SQLite needs one copy of the search pattern for each LIKE placeholder.
             params.extend([needle] * 5)
         if external_session_id.strip():
             where.append("t.conversation_id = ?")

@@ -16,7 +16,6 @@ class TranscriptListenerConfig:
     stream_url: str = ""
     app_url: str = DEFAULT_APP_URL
     key_prefix: str = ""
-    user_speaker: str = "TO"
     run_listener: bool = False
     archive_raw: bool = True
     extract_to_memory: bool = True
@@ -28,9 +27,6 @@ class TranscriptListenerConfig:
     auto_review_transcripts: bool = True
     auto_review_deliver: str = "local"
     auto_review_toolsets: tuple[str, ...] | None = None
-    default_call_direction: str = "inbound"
-    user_speaker_by_direction: tuple[tuple[str, str], ...] = (("inbound", "TO"), ("outbound", "FROM"))
-    trust_event_direction: bool = False
     activation_names: tuple[str, ...] = ()
     max_websocket_message_bytes: int = 1024 * 1024
     allowed_stream_hosts: tuple[str, ...] = ("connections.smartnumbers.labs.bandwidth.com",)
@@ -61,7 +57,6 @@ def config_from_mapping(entry: Mapping[str, Any]) -> TranscriptListenerConfig:
         stream_url=_str(entry.get("stream_url")),
         app_url=_str(entry.get("app_url"), DEFAULT_APP_URL),
         key_prefix=_str(entry.get("key_prefix")),
-        user_speaker=_str(entry.get("user_speaker"), "TO"),
         run_listener=_bool(entry.get("run_listener"), False),
         archive_raw=_bool(entry.get("archive_raw"), True),
         extract_to_memory=_bool(entry.get("extract_to_memory"), True),
@@ -73,9 +68,6 @@ def config_from_mapping(entry: Mapping[str, Any]) -> TranscriptListenerConfig:
         auto_review_transcripts=_bool(entry.get("auto_review_transcripts"), True),
         auto_review_deliver=_str(entry.get("auto_review_deliver"), "local"),
         auto_review_toolsets=_str_tuple(entry.get("auto_review_toolsets")),
-        default_call_direction=_call_direction(entry.get("default_call_direction"), "inbound"),
-        user_speaker_by_direction=_speaker_mapping(entry.get("user_speaker_by_direction"), fallback=_str(entry.get("user_speaker"), "TO")),
-        trust_event_direction=_bool(entry.get("trust_event_direction"), False),
         activation_names=_str_tuple(entry.get("activation_names")) or (),
         max_websocket_message_bytes=_bounded_int(
             entry.get("max_websocket_message_bytes"),
@@ -138,18 +130,3 @@ def _str_tuple(value: Any) -> tuple[str, ...] | None:
         items = [item.strip() for item in value if isinstance(item, str)]
         return tuple(item for item in items if item) or None
     return None
-
-
-def _call_direction(value: Any, default: str) -> str:
-    candidate = _str(value, default).lower()
-    return candidate if candidate in {"inbound", "outbound"} else default
-
-
-def _speaker_mapping(value: Any, *, fallback: str) -> tuple[tuple[str, str], ...]:
-    mapping = {"inbound": fallback, "outbound": "FROM"}
-    if isinstance(value, Mapping):
-        for direction in ("inbound", "outbound"):
-            speaker = _str(value.get(direction))
-            if speaker:
-                mapping[direction] = speaker
-    return tuple(mapping.items())

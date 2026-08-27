@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from hashlib import sha256
 from typing import Any
 
-from .models import NormalizedTranscript, TranscriptTurn
+from .models import VALID_CALL_DIRECTIONS, NormalizedTranscript, TranscriptTurn
 
 
 class TranscriptParseError(ValueError):
@@ -47,13 +47,19 @@ def parse_transcript_payload(
     source = _optional_str(metadata.get("source"), default=source)
     participants = _parse_participants(data.get("participants"))
     turns = _parse_turns(data.get("turns"), participants)
-    user_speaker = _optional_str(metadata.get("user_speaker"), default=_optional_str(data.get("user_speaker"), default="TO"))
+    direction = _parse_direction(metadata.get("direction", data.get("direction")))
+    user_speaker = "FROM" if direction == "outbound" else "TO"
+    from_number = _optional_str(metadata.get("from"), default=_optional_str(data.get("from")))
+    to_number = _optional_str(metadata.get("to"), default=_optional_str(data.get("to")))
     return NormalizedTranscript(
         conversation_id=conversation_id,
         source=source,
         participants=participants,
         turns=tuple(turns),
         user_speaker=user_speaker or None,
+        direction=direction,
+        from_number=from_number or None,
+        to_number=to_number or None,
         raw=dict(data),
     )
 
@@ -109,13 +115,19 @@ def _parse_markdown(
 
     conversation_id = _optional_str(metadata.get("conversation_id"), default=_stable_conversation_id(payload))
     source = _optional_str(metadata.get("source"), default="external-transcript")
-    user_speaker = _optional_str(metadata.get("user_speaker"), default="TO")
+    direction = _parse_direction(metadata.get("direction"))
+    user_speaker = "FROM" if direction == "outbound" else "TO"
+    from_number = _optional_str(metadata.get("from"))
+    to_number = _optional_str(metadata.get("to"))
     return NormalizedTranscript(
         conversation_id=conversation_id,
         source=source,
         participants=participants,
         turns=tuple(turns),
         user_speaker=user_speaker or None,
+        direction=direction,
+        from_number=from_number or None,
+        to_number=to_number or None,
         raw={"format": "markdown", "text": payload},
     )
 
@@ -143,6 +155,11 @@ def _optional_str(value: Any, *, default: str = "") -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return default
+
+
+def _parse_direction(value: Any) -> str:
+    direction = _optional_str(value).lower()
+    return direction if direction in VALID_CALL_DIRECTIONS else "inbound"
 
 
 def _parse_participants(value: Any) -> dict[str, str]:

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+VALID_CALL_DIRECTIONS = frozenset({"inbound", "outbound"})
+
 
 @dataclass(frozen=True)
 class TranscriptTurn:
@@ -27,6 +29,9 @@ class NormalizedTranscript:
     participants: Mapping[str, str]
     turns: tuple[TranscriptTurn, ...]
     user_speaker: str | None = None
+    direction: str = "inbound"
+    from_number: str | None = None
+    to_number: str | None = None
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     def searchable_text(self) -> str:

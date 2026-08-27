@@ -1,4 +1,4 @@
-from transcript_listener.authorization import activation_names, authoritative_speaker, detect_named_commands
+from transcript_listener.authorization import activation_names, detect_named_commands
 from transcript_listener.config import config_from_mapping
 from transcript_listener.parser import parse_transcript_payload
 
@@ -41,17 +41,6 @@ def test_named_commands_require_the_authoritative_speaker_and_exact_wake_name():
     )
 
     assert [command.command for command in commands] == ["add that event to my calendar."]
-
-
-def test_authoritative_speaker_uses_local_direction_configuration():
-    config = config_from_mapping(
-        {
-            "default_call_direction": "outbound",
-            "user_speaker_by_direction": {"inbound": "TO", "outbound": "FROM"},
-        }
-    )
-
-    assert authoritative_speaker(config, {"user_speaker": "TO", "direction": "inbound"}) == "FROM"
 
 
 def test_semantic_extraction_accepts_a_mid_turn_verbatim_command_only():

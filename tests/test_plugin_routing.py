@@ -146,7 +146,6 @@ def test_transcript_url_event_applies_markdown_metadata(monkeypatch, tmp_path):
     config = config_from_mapping(
         {
             "extract_to_memory": False,
-            "user_speaker": "TO",
         }
     )
 
@@ -159,6 +158,11 @@ def test_transcript_url_event_applies_markdown_metadata(monkeypatch, tmp_path):
             "conversation_id": "call_456",
             "source": "bandwidth-call-recording",
             "user_speaker": "FROM",
+            "metadata": {
+                "direction": "inbound",
+                "from": "+18636389992",
+                "to": "+18633307564",
+            },
         }
     )
 
@@ -167,23 +171,39 @@ def test_transcript_url_event_applies_markdown_metadata(monkeypatch, tmp_path):
     results = archive.search(query="appointment", limit=5)
     assert len(results) == 1
     assert results[0].external_session_id == "call_456"
+    assert results[0].direction == "inbound"
+    assert results[0].from_number == "+18636389992"
+    assert results[0].to_number == "+18633307564"
     assert ack is not None
     assert ack["success"] is True
     assert ack["conversation_id"] == "call_456"
 
 
-def test_raw_markdown_uses_configured_outbound_authority(tmp_path):
+def test_transcript_url_uses_event_direction_for_authority(monkeypatch, tmp_path):
     archive = TranscriptArchive(tmp_path / "transcripts.db")
     config = config_from_mapping(
         {
             "extract_to_memory": False,
-            "default_call_direction": "outbound",
             "activation_names": ["Ares"],
         }
     )
     ctx = FakeDispatchContext()
+    monkeypatch.setattr(plugin, "download_transcript_url", lambda *args, **kwargs: OUTBOUND_COMMAND_MARKDOWN)
 
-    ack = plugin._handle_websocket_message(ctx, archive, config, OUTBOUND_COMMAND_MARKDOWN)
+    ack = plugin._handle_websocket_message(
+        ctx,
+        archive,
+        config,
+        json.dumps(
+            {
+                "type": "transcript_url",
+                "event_id": "evt_outbound",
+                "url": "https://example.com/transcript.md",
+                "conversation_id": "call_outbound",
+                "metadata": {"direction": "outbound"},
+            }
+        ),
+    )
 
     assert ack is not None and ack["success"] is True
     assert len(ctx.calls) == 1

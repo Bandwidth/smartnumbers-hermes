@@ -24,7 +24,7 @@ TRANSCRIPT_SEARCH_SCHEMA = {
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Words or phrases to find in the spoken turns of archived phone calls.",
+                "description": "Words, phrases, or phone numbers to find in archived phone calls.",
             },
             "external_session_id": {
                 "type": "string",
@@ -34,6 +34,13 @@ TRANSCRIPT_SEARCH_SCHEMA = {
                 "type": "string",
                 "description": "Filter phone-call turns by participant speaker ID or label.",
             },
+            "direction": {
+                "type": "string",
+                "enum": ["inbound", "outbound"],
+                "description": "Filter calls by direction.",
+            },
+            "from": {"type": "string", "description": "Filter calls by originating phone number."},
+            "to": {"type": "string", "description": "Filter calls by destination phone number."},
             "since": {"type": "string", "description": "Optional event_received_at ISO timestamp lower bound."},
             "until": {"type": "string", "description": "Optional event_received_at ISO timestamp upper bound."},
             "limit": {"type": "integer", "description": "Maximum results to return, clamped to 1-50.", "default": 10},
@@ -54,6 +61,9 @@ def make_transcript_search_handler(archive: TranscriptArchive):
                 query=str(args.get("query") or ""),
                 external_session_id=str(args.get("external_session_id") or ""),
                 speaker=str(args.get("speaker") or ""),
+                direction=str(args.get("direction") or ""),
+                from_number=str(args.get("from") or ""),
+                to_number=str(args.get("to") or ""),
                 since=str(args.get("since") or ""),
                 until=str(args.get("until") or ""),
                 limit=limit,

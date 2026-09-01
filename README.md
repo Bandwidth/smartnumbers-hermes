@@ -1,6 +1,7 @@
 # Hermes Smartnumbers
 
-Hermes plugin for receiving and archiving Smartnumbers conversation transcripts,
+Hermes plugin for receiving and archiving
+[Smartnumbers](https://smartnumbers.labs.bandwidth.com) conversation transcripts,
 extracting durable memory, and queuing tool-capable post-call agent reviews.
 
 ## Install

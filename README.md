@@ -1,6 +1,7 @@
 # Hermes Smartnumbers
 
-Hermes plugin for receiving and archiving Smartnumbers conversation transcripts,
+Hermes plugin for receiving and archiving
+[Smartnumbers](https://smartnumbers.labs.bandwidth.com) conversation transcripts,
 extracting durable memory, and queuing tool-capable post-call agent reviews.
 
 ## Install
@@ -25,9 +26,11 @@ Connect the installed plugin to Smartnumbers:
 hermes smartnumbers setup
 ```
 
-The browser setup flow obtains an API key, saves it to Hermes' `.env` as
-`TRANSCRIPT_LISTENER_API_KEY`, enables the listener, and writes the connection
-settings under `plugins.entries.smartnumbers`.
+The command opens the Smartnumbers setup flow in your browser. Sign in or
+[create a Smartnumbers account](https://smartnumbers.labs.bandwidth.com), then
+approve the connection. The setup flow obtains an API key, saves it to Hermes'
+`.env` as `TRANSCRIPT_LISTENER_API_KEY`, enables the listener, and writes the
+connection settings under `plugins.entries.smartnumbers`.
 
 ### Remote Or Docker Setup
 
